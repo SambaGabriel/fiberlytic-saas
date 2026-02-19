@@ -1,6 +1,9 @@
 import React, { useState, useCallback, useMemo, useRef, createContext, useContext, useEffect } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import useJobs from "./hooks/useJobs.js";
+import useUsers from "./hooks/useUsers.js";
+import useRateCards from "./hooks/useRateCards.js";
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const DARK = {
@@ -104,84 +107,22 @@ const STATUS_CFG={Unassigned:{c:T.textDim,bg:"rgba(71,85,105,0.15)"},Assigned:{c
 const REDLINE_CFG={"Not Uploaded":{c:T.textDim,bg:"rgba(71,85,105,0.15)"},Uploaded:{c:T.warning,bg:T.warningSoft},"Under Review":{c:T.purple,bg:T.purpleSoft},Approved:{c:T.success,bg:T.successSoft},Rejected:{c:T.danger,bg:T.dangerSoft}};
 const FIN_CFG={Calculated:{c:T.success,bg:T.successSoft},"Missing Rate":{c:T.danger,bg:T.dangerSoft},"No Production":{c:T.textDim,bg:"rgba(71,85,105,0.15)"},"Mapping Needed":{c:T.warning,bg:T.warningSoft}};
 
-const USERS=[
- {id:"u1",name:"Admin User",role:"admin",email:"admin@fiberlytic.com"},
- {id:"u2",name:"Sam Domaleski",role:"supervisor",email:"sam@fiberlytic.com",scope:{customer:"Brightspeed",region:"Alabama"},weeklySalary:1500,commissionRate:0.03},
- {id:"u3",name:"Matheus",role:"lineman",email:"matheus@fiberlytic.com"},
- {id:"u4",name:"Wellington",role:"lineman",email:"wellington@fiberlytic.com"},
- {id:"u5",name:"Donaldo",role:"lineman",email:"donaldo@fiberlytic.com"},
- {id:"u6",name:"Vanderson",role:"redline_specialist",email:"vanderson@fiberlytic.com"},
- {id:"u8",name:"Chris Kot",role:"billing",email:"chris@fiberlytic.com"},
- {id:"u9",name:"Roberto Vega",role:"truck_investor",email:"roberto@investor.com",trucks:["TRK-101","TRK-103","TRK-105"]},
- {id:"u10",name:"Frank Dillard",role:"truck_investor",email:"frank@investor.com",trucks:["TRK-102","TRK-106"]},
- {id:"u11",name:"Josh Grady",role:"foreman",email:"josh@fiberlytic.com"},
- {id:"u12",name:"Marcus Bell",role:"foreman",email:"marcus@fiberlytic.com"},
- {id:"u13",name:"Tony Reeves",role:"drill_investor",email:"tony@investor.com",drills:["DRL-201"]},
- {id:"u14",name:"Jean-Luc Beer",role:"client_manager",email:"jeanluc@mastec.com",scope:{client:"MasTec",customer:"Brightspeed",regions:["Alabama","Tennessee"]}},
-];
+// USERS — loaded from backend via useUsers hook. This empty array is the fallback.
+let USERS=[];
 
-const TRUCKS=[
- {id:"TRK-101",label:"TRK-101 · 2012 Ram 5500 Bucket Truck",vin:"3C7WDNBL9CG296559",owner:"Investor A",investorId:"u9",investorName:"Roberto Vega",compliance:{dotInspection:{date:"2025-08-15",expires:"2026-08-15"},insurance:{provider:"Progressive Commercial",policy:"PCM-4481920",expires:"2026-04-12"},registration:{state:"AL",expires:"2026-06-30"},oilChange:{last:"2025-12-10",nextDue:"2026-03-10",mileage:87420},tireInspection:{date:"2025-11-01",nextDue:"2026-05-01"}}},
- {id:"TRK-102",label:"TRK-102 · 2009 Ford F-550",vin:"1FDAF56R09EA32271",owner:"Investor B",investorId:"u10",investorName:"Frank Dillard",compliance:{dotInspection:{date:"2025-06-20",expires:"2026-02-20"},insurance:{provider:"Progressive Commercial",policy:"PCM-4481921",expires:"2026-05-30"},registration:{state:"AL",expires:"2026-03-15"},oilChange:{last:"2025-10-05",nextDue:"2026-01-05",mileage:124880},tireInspection:{date:"2025-09-15",nextDue:"2026-03-15"}}},
- {id:"TRK-103",label:"TRK-103 · 2008 Ford F-350",vin:"1FDWF36538EE36946",owner:"Investor A",investorId:"u9",investorName:"Roberto Vega",compliance:{dotInspection:{date:"2025-10-01",expires:"2026-10-01"},insurance:{provider:"State Farm Commercial",policy:"SFC-7712340",expires:"2026-07-22"},registration:{state:"AL",expires:"2026-09-30"},oilChange:{last:"2026-01-20",nextDue:"2026-04-20",mileage:98350},tireInspection:{date:"2025-12-15",nextDue:"2026-06-15"}}},
- {id:"TRK-104",label:"TRK-104 · 2019 Ford F-150",vin:"1FTFX1E50KKC11609",owner:"Company",investorId:null,investorName:null,compliance:{dotInspection:{date:"2025-11-10",expires:"2026-11-10"},insurance:{provider:"Progressive Commercial",policy:"PCM-4481922",expires:"2026-04-12"},registration:{state:"AL",expires:"2026-11-30"},oilChange:{last:"2026-01-05",nextDue:"2026-04-05",mileage:45200},tireInspection:{date:"2026-01-05",nextDue:"2026-07-05"}}},
- {id:"TRK-105",label:"TRK-105 · 2018 Ford F-150",vin:"1FTEW1EP4JKE96617",owner:"Investor A",investorId:"u9",investorName:"Roberto Vega",compliance:{dotInspection:{date:"2025-09-22",expires:"2026-09-22"},insurance:{provider:"Progressive Commercial",policy:"PCM-4481923",expires:"2026-04-12"},registration:{state:"AL",expires:"2026-08-31"},oilChange:{last:"2025-11-18",nextDue:"2026-02-18",mileage:62100},tireInspection:{date:"2025-10-20",nextDue:"2026-04-20"}}},
- {id:"TRK-106",label:"TRK-106 · 2016 Ford F-150",vin:"1FTEX1EP7GFA62192",owner:"Investor B",investorId:"u10",investorName:"Frank Dillard",compliance:{dotInspection:{date:"2025-07-30",expires:"2026-07-30"},insurance:{provider:"State Farm Commercial",policy:"SFC-7712341",expires:"2026-03-01"},registration:{state:"AL",expires:"2026-07-31"},oilChange:{last:"2025-12-22",nextDue:"2026-03-22",mileage:78950},tireInspection:{date:"2025-11-10",nextDue:"2026-05-10"}}},
- {id:"TRK-107",label:"TRK-107 · 2014 Chevrolet Silverado",vin:"1GCVKREH0EZ184071",owner:"Company",investorId:null,investorName:null,compliance:{dotInspection:{date:"2025-12-05",expires:"2026-12-05"},insurance:{provider:"Progressive Commercial",policy:"PCM-4481924",expires:"2026-04-12"},registration:{state:"AL",expires:"2026-12-31"},oilChange:{last:"2026-01-28",nextDue:"2026-04-28",mileage:112300},tireInspection:{date:"2025-12-01",nextDue:"2026-06-01"}}},
-];
+// TRUCKS — backend doesn't have this model yet, empty for now
+const TRUCKS=[];
 
-const DRILLS=[
- {id:"DRL-201",label:"DRL-201 · 2026 Vermeer D20x22 S3",owner:"Investor C",investorId:"u13",investorName:"Tony Reeves",compliance:{lastService:{date:"2026-01-15",nextDue:"2026-04-15",hours:320},hydraulicInspection:{date:"2025-12-01",nextDue:"2026-06-01"},bitReplacement:{date:"2026-01-20",bitsUsed:4,nextDue:"2026-03-20"}}},
- {id:"DRL-202",label:"DRL-202 · 2024 Ditch Witch JT20",owner:"Company",investorId:null,investorName:null,compliance:{lastService:{date:"2025-11-20",nextDue:"2026-02-20",hours:580},hydraulicInspection:{date:"2025-10-15",nextDue:"2026-04-15"},bitReplacement:{date:"2025-12-10",bitsUsed:6,nextDue:"2026-02-10"}}},
-];
+// DRILLS — backend doesn't have this model yet, empty for now
+const DRILLS=[];
 
-// CDL tracking for drivers
-const CDL_DATA={
- u3:{cdlNumber:"AL-CDL-8834201",cdlClass:"A",state:"AL",expires:"2027-03-15",medicalCard:{expires:"2026-08-20"},endorsements:["N"]},
- u4:{cdlNumber:"AL-CDL-7721093",cdlClass:"B",state:"AL",expires:"2026-11-30",medicalCard:{expires:"2026-04-10"},endorsements:[]},
- u5:{cdlNumber:"AL-CDL-9912847",cdlClass:"A",state:"AL",expires:"2027-06-22",medicalCard:{expires:"2026-12-15"},endorsements:["N","T"]},
- u11:{cdlNumber:"AL-CDL-5543120",cdlClass:"A",state:"AL",expires:"2026-09-18",medicalCard:{expires:"2026-03-05"},endorsements:["N","H"]},
- u12:{cdlNumber:"AL-CDL-6678432",cdlClass:"B",state:"AL",expires:"2027-01-28",medicalCard:{expires:"2026-10-30"},endorsements:[]},
-};
+// CDL tracking — backend doesn't have this model yet, empty for now
+const CDL_DATA={};
 
-// ─── Material & Inventory System ────────────────────────────────────────────
-const MATERIALS=[
- {id:"mat-fiber48",name:"Fiber Spool (48ct)",unit:"ft",unitCost:0.18,category:"fiber",restockThreshold:5000},
- {id:"mat-fiber96",name:"Fiber Spool (96ct)",unit:"ft",unitCost:0.28,category:"fiber",restockThreshold:3000},
- {id:"mat-strand",name:"Strand",unit:"ft",unitCost:0.08,category:"cable",restockThreshold:5000},
- {id:"mat-anchor",name:"Anchor Assembly",unit:"ea",unitCost:12.50,category:"hardware",restockThreshold:10},
- {id:"mat-coil",name:"Expansion Coil",unit:"ea",unitCost:6.75,category:"hardware",restockThreshold:8},
- {id:"mat-snowshoe",name:"Snowshoe Clamp",unit:"ea",unitCost:4.25,category:"hardware",restockThreshold:6},
- {id:"mat-conduit",name:"Conduit (1.25\")",unit:"ft",unitCost:0.45,category:"conduit",restockThreshold:2000},
- {id:"mat-lash-wire",name:"Lashing Wire",unit:"ft",unitCost:0.04,category:"cable",restockThreshold:8000},
-];
+// MATERIALS — backend doesn't have this model yet, empty for now
+const MATERIALS=[];
 
-function genPickups(){
- const now=Date.now(),DAY=86400000;
- const pickups=[];
- const warehouse="MasTec Warehouse — Huntsville, AL";
- // Generate pickups for each truck that has completed jobs
- TRUCKS.forEach((t,ti)=>{
- // 2-3 pickups per truck over last 30 days
- const count=2+(ti%2);
- for(let p=0;p<count;p++){
- const daysAgo=2+p*8+(ti*3)%10;
- const dt=new Date(now-daysAgo*DAY);
- const items=[
- {materialId:"mat-fiber48",qty:8000+(ti*1200+p*2000)%12000},
- {materialId:"mat-strand",qty:6000+(ti*900+p*1500)%10000},
- {materialId:"mat-anchor",qty:15+(ti*3+p*5)%25},
- {materialId:"mat-coil",qty:10+(ti*2+p*3)%15},
- {materialId:"mat-snowshoe",qty:6+(ti+p*2)%10},
- {materialId:"mat-lash-wire",qty:10000+(ti*2000+p*3000)%15000},
- ];
- if(ti%3===0)items.push({materialId:"mat-conduit",qty:2000+(p*1000)%3000});
- pickups.push({id:`PU-${String(ti*10+p+1).padStart(4,"0")}`,truckId:t.id,warehouse,date:dt.toISOString().split("T")[0],pickedUpBy:USERS.filter(u=>u.role==="lineman"||u.role==="foreman")[(ti+p)%5]?.name||"Unknown",items,
- signedOff:true,notes:p===0?"Weekly restock":"Mid-week top-up"});
- }
- });
- return pickups;
-}
+// genPickups removed — pickups will be loaded from backend when model exists
 
 const GROUND_TYPES=["Normal","Cobble","Rock"];
 
@@ -198,59 +139,7 @@ fillMap("MasTec","Spectrum","Alabama","SPEC");fillMap("MasTec","Spectrum","North
 fillMap("MasTec","All Points Broadband","Virginia","APBB");fillMap("MasTec","All Points Broadband","Tennessee","APBB");
 CLIENTS.forEach(cl=>CUSTOMERS.forEach(cu=>REGIONS.forEach(rg=>{if(!CODE_MAP[`${cl}|${cu}|${rg}`])CODE_MAP[`${cl}|${cu}|${rg}`]={Overlash:"GENLASH",Strand:"GENSTRAND",Fiber:"GENFBR"};})));
 
-function genRateCards(){
- const g={};
- const cfgs=[
- {cl:"MasTec",cu:"Brightspeed",rg:"Alabama",pre:"BSPD",m:1.0},
- {cl:"MasTec",cu:"Brightspeed",rg:"North Carolina",pre:"BSPD",m:1.05},
- {cl:"MasTec",cu:"Brightspeed",rg:"Virginia",pre:"BSPD",m:1.02},
- {cl:"MasTec",cu:"Brightspeed",rg:"Tennessee",pre:"BSPD",m:0.98},
- {cl:"MasTec",cu:"Spectrum",rg:"Alabama",pre:"SPEC",m:0.95},
- {cl:"MasTec",cu:"Spectrum",rg:"North Carolina",pre:"SPEC",m:1.0},
- {cl:"MasTec",cu:"Spectrum",rg:"Virginia",pre:"SPEC",m:0.97},
- {cl:"MasTec",cu:"Spectrum",rg:"Tennessee",pre:"SPEC",m:0.93},
- {cl:"MasTec",cu:"All Points Broadband",rg:"Virginia",pre:"APBB",m:1.1},
- {cl:"MasTec",cu:"All Points Broadband",rg:"Tennessee",pre:"APBB",m:1.0},
- {cl:"MasTec",cu:"All Points Broadband",rg:"Alabama",pre:"APBB",m:1.03},
- {cl:"MasTec",cu:"All Points Broadband",rg:"North Carolina",pre:"APBB",m:1.07},
- ];
- const base=[
- // Aerial codes
- {suf:"LASH",desc:"Overlash",mapsTo:"Overlash",unit:"per foot",ng:1.65,lm:0.55,iv:0.08,dept:"aerial"},
- {suf:"STRAND",desc:"Strand",mapsTo:"Strand",unit:"per foot",ng:1.50,lm:0.50,iv:0.07,dept:"aerial"},
- {suf:"FBR",desc:"Fiber",mapsTo:"Fiber",unit:"per foot",ng:2.10,lm:0.70,iv:0.10,dept:"aerial"},
- {suf:"CNDPULL",desc:"Fiber Conduit Pulling",mapsTo:"Fiber Conduit Pulling",unit:"per foot",ng:1.35,lm:0.45,iv:0.06,dept:"aerial"},
- {suf:"ANCHOR",desc:"Anchor Install",mapsTo:"Anchor",unit:"per each",ng:75.00,lm:30.00,iv:4.00,dept:"aerial"},
- {suf:"COIL",desc:"Coil/Snowshoe",mapsTo:"Coil",unit:"per each",ng:40.00,lm:16.00,iv:2.00,dept:"aerial"},
- {suf:"ENTRY",desc:"Building Entry",mapsTo:"Entry",unit:"per each",ng:125.00,lm:50.00,iv:7.00,dept:"aerial"},
- // Underground boring codes
- {suf:"DBI",desc:"Directional Boring Initial",mapsTo:"DB-Normal",unit:"per foot",ng:12.50,lm:0,iv:0.15,dept:"underground"},
- {suf:"DBIC",desc:"Directional Boring Initial - Cobble",mapsTo:"DB-Cobble",unit:"per foot",ng:20.00,lm:0,iv:0.22,dept:"underground"},
- {suf:"DBIR",desc:"Directional Boring Initial - Rock",mapsTo:"DB-Rock",unit:"per foot",ng:85.00,lm:0,iv:0.75,dept:"underground"},
- {suf:"DBIA",desc:"Directional Boring Additional",mapsTo:"DB-Additional",unit:"per foot",ng:3.50,lm:0,iv:0.04,dept:"underground"},
- {suf:"DBIAR",desc:"Directional Boring Additional - Rock",mapsTo:"DB-Additional-Rock",unit:"per foot",ng:22.00,lm:0,iv:0.22,dept:"underground"},
- ];
- cfgs.forEach(c=>{
- const k=`${c.cl}|${c.cu}|${c.rg}`;
- const codes=base.map(b=>({code:c.pre+b.suf,description:b.desc,mapsTo:b.mapsTo,unit:b.unit}));
- const profiles={"NextGen Default":{},"Matheus":{},"Wellington":{},"Donaldo":{},"Josh Grady":{},"Marcus Bell":{},"Investor A":{},"Investor B":{},"Investor C":{},"Investor D":{}};
- codes.forEach(cd=>{const b=base.find(x=>cd.code.endsWith(x.suf));
- profiles["NextGen Default"][cd.code]={nextgenRate:+(b.ng*c.m).toFixed(2)};
- profiles["Matheus"][cd.code]={linemanRate:+(b.lm*c.m).toFixed(2)};
- profiles["Wellington"][cd.code]={linemanRate:+(b.lm*c.m*0.95).toFixed(2)};
- profiles["Donaldo"][cd.code]={linemanRate:+(b.lm*c.m*1.05).toFixed(2)};
- // Foremen don't use per-code lineman rates (they use day rate + conduit ft), but we store 0
- profiles["Josh Grady"][cd.code]={linemanRate:0};
- profiles["Marcus Bell"][cd.code]={linemanRate:0};
- profiles["Investor A"][cd.code]={investorRate:+(b.iv*c.m).toFixed(2)};
- profiles["Investor B"][cd.code]={investorRate:+(b.iv*c.m*1.1).toFixed(2)};
- profiles["Investor C"][cd.code]={investorRate:+(b.iv*c.m).toFixed(2)};
- profiles["Investor D"][cd.code]={investorRate:+(b.iv*c.m*0.95).toFixed(2)};
- });
- g[k]={id:k,client:c.cl,customer:c.cu,region:c.rg,codes,profiles,uploadedBy:"Admin User",uploadedAt:"2025-01-15T10:00:00Z",version:1,changeLog:["Initial rate card upload"]};
- });
- return g;
-}
+// genRateCards removed — rate cards loaded from backend via useRateCards hook
 
 function calcJob(job,rc){
  if(!job.production)return{status:"No Production",items:[],totals:null};
@@ -367,128 +256,7 @@ function getPayableWeeks(){
  return weeks;
 }
 
-// ─── Seed Jobs ───────────────────────────────────────────────────────────────
-function genJobs(){
- const jobs=[];const sts=Object.keys(STATUS_CFG);
- const lms=USERS.filter(u=>u.role==="lineman");
- const DAY=86400000;
- // For preview: simulate data as if generated on Thursday of current week
- const realNow=Date.now();const todayDay=new Date(realNow).getDay();
- const daysToThursday=todayDay<=4?(4-todayDay):(4-todayDay+7);
- const now=realNow+(daysToThursday*DAY);
- // Generate 80 jobs spread over ~6 months (180 days)
- for(let i=1;i<=80;i++){
- const cu=CUSTOMERS[i%3],rg=REGIONS[i%4],locs=LOCATIONS[rg]||["Unknown"];
- // First 6 are "Assigned" for lineman demo, rest cycle through statuses
- const st=i<=6?"Assigned":sts[(i-6)%sts.length];
- const lm=st==="Unassigned"?null:lms[i%lms.length];
- const hasProd=["Pending Redlines","Under Client Review","Ready to Invoice","Rejected","Billed"].includes(st);
- const hasRL=["Under Client Review","Ready to Invoice","Rejected","Billed"].includes(st);
- const isApp=["Ready to Invoice","Billed"].includes(st);
- let rls="Not Uploaded";if(hasRL&&st==="Under Client Review")rls="Under Review";else if(isApp)rls="Approved";else if(st==="Rejected")rls="Rejected";
-
- // Spread dates: simulate it being Thursday of the current week
- // Jobs 1-18: current week (Mon-Thu, 0-3 days back), 19-40: last 30 days, 41-80: last 180 days
- // First 6 still "Assigned" (no prod), but jobs 7-18 have production this week
- const daysBack=i<=18?Math.floor((i-1)*0.22):i<=40?4+((i-18)*1.2):30+((i-40)*2.8);
- const compDate=new Date(now-(daysBack*DAY));
- const schedDate=new Date(now-((daysBack+7)*DAY));
- // Vary footage realistically: 600-3500 ft
- const totalFeet=2000+Math.floor(((i*97+i*i*13)%6000));
-
- const isIlluminate=i%5===0; // Every 5th job is Illuminate
- const subName=isIlluminate?"Illuminate":"NextGen Fiber";
- jobs.push({id:`${String(i+1).padStart(4,"0")}`,department:"aerial",subcontractor:subName,client:"MasTec",customer:i===2?"Brightspeed":cu,region:i===2?"Alabama":rg,location:i===2?"Barkley Bridge Rd, Falkville, AL":locs[i%locs.length],olt:i===2?"FLVLALXA":OLTS[i%OLTS.length],feederId:FEEDERS[i%FEEDERS.length],workType:WORK_TYPES[i%WORK_TYPES.length],estimatedFootage:i===2?7190:totalFeet,
- poleCount:i===2?25:(5+Math.floor(Math.random()*18)),
- scheduledDate:schedDate.toISOString().split("T")[0],
- supervisorNotes:i%3===0?"Priority — complete ASAP.":i%3===1?"Standard route.":"",
- assignedLineman:lm?.id||null,assignedTruck:lm?TRUCKS[i%TRUCKS.length].id:null,truckInvestor:lm?TRUCKS[i%TRUCKS.length].owner:null,
- assignedDrill:null,drillInvestor:null,
- status:st,redlineStatus:rls,srNumber:isApp?`${1050000+i*31}`:null,
- production:hasProd?(()=>{
- const spanCount=2+(i%4);
- const spns=Array.from({length:spanCount},(_,s)=>{
- const spanFt=50+((i+s)*37)%300;
- const fiberNum=`${14500+((i+s)*143)%2500}${s%2===0?`.${14500+((i+s)*143)%2500+s*47}`:""}`;
- return{spanId:s+1,spanWorkType:s%5===2?"Overlash":"S+F",strandSpan:spanFt,anchora:s%3===0,fiberMarking:fiberNum,coil:s%4===0,poleTransfer:s%5===1,snowshoe:s%5===0};
- });
- const actTotal=spns.reduce((s,r)=>s+r.strandSpan+(r.coil?COIL_BONUS_FT:0),0);
- const sfTotal=spns.filter(r=>r.spanWorkType!=="Overlash").reduce((s,r)=>s+r.strandSpan+(r.coil?COIL_BONUS_FT:0),0);
- const ovlTotal=spns.filter(r=>r.spanWorkType==="Overlash").reduce((s,r)=>s+r.strandSpan+(r.coil?COIL_BONUS_FT:0),0);
- return{completedDate:compDate.toISOString().split("T")[0],totalFeet:actTotal,
- totalStrand:sfTotal,totalFiber:sfTotal,totalOverlash:ovlTotal,totalConduit:0,
- anchors:spns.filter(r=>r.anchora).length,coils:spns.filter(r=>r.coil).length,snowshoes:spns.filter(r=>r.snowshoe).length,poleTransfers:spns.filter(r=>r.poleTransfer).length,entries:spns.filter(r=>r.strandSpan||r.fiberMarking).length,
- spans:spns,
- submittedAt:new Date(compDate.getTime()+3600000).toISOString(),submittedBy:lm?.id||"u3",comments:i%5===0?"Rerouted around downed tree on span 3.":""};
- })():null,
- redlines:hasRL?[{version:1,fileName:`Redline_${FEEDERS[i%FEEDERS.length]}_v1.pdf`,uploadedAt:new Date(compDate.getTime()+7200000).toISOString(),uploadedBy:"u6",notes:"Initial redline."}]:[],
- reviewNotes:st==="Rejected"?"Span 2 footage mismatch. Re-verify.":"",
- confirmedTotals:hasRL?(()=>{const spanCount=2+(i%4);const actTotal=Array.from({length:spanCount},(_,s)=>50+((i+s)*37)%300).reduce((a,b)=>a+b,0);return{totalFeet:actTotal+([-30,-10,0,0,10,20][i%6]),totalStrand:actTotal+([-30,-10,0,0,10,20][i%6]),anchors:Math.ceil(spanCount/3),coils:Math.ceil(spanCount/4),snowshoes:Math.ceil(spanCount/5),poleTransfers:Math.floor(spanCount/5),entries:spanCount,confirmedBy:"u6",confirmedAt:new Date(compDate.getTime()+5400000).toISOString()};})():null,
- billedAt:st==="Billed"?new Date(compDate.getTime()+14*86400000).toISOString():null,
- mapPdf:i===2?"BSPD001_04H_Map.pdf":`Map_${FEEDERS[i%FEEDERS.length]}.pdf`,routePoles:i===2?[{id:"p295",label:"MRE#295",distToNext:262,lat:34.37280,lng:-86.90850},{id:"p296",label:"MRE#296",distToNext:279,lat:34.37030,lng:-86.90830},{id:"p299",label:"MRE#299",distToNext:322,lat:34.36760,lng:-86.90810},{id:"p300",label:"MRE#300",distToNext:319,lat:34.36460,lng:-86.90790},{id:"p301",label:"MRE#301",distToNext:201,lat:34.36270,lng:-86.90770},{id:"p302",label:"MRE#302",distToNext:292,lat:34.36080,lng:-86.90750},{id:"p303",label:"MRE#303",distToNext:240,lat:34.35800,lng:-86.90730},{id:"p304",label:"MRE#304",distToNext:270,lat:34.35580,lng:-86.90710},{id:"p305",label:"MRE#305",distToNext:357,lat:34.35300,lng:-86.90690},{id:"p306",label:"MRE#306",distToNext:204,lat:34.35110,lng:-86.90660},{id:"p307",label:"MRE#307",distToNext:296,lat:34.34920,lng:-86.90640},{id:"p308",label:"MRE#308",distToNext:488,lat:34.34640,lng:-86.90620},{id:"p309",label:"MRE#309",distToNext:379,lat:34.34270,lng:-86.90590},{id:"p310",label:"MRE#310",distToNext:453,lat:34.33910,lng:-86.90560},{id:"p311",label:"MRE#311",distToNext:129,lat:34.33790,lng:-86.90540},{id:"p312",label:"MRE#312",distToNext:213,lat:34.33590,lng:-86.90520},{id:"p313",label:"MRE#313",distToNext:462,lat:34.33160,lng:-86.90490},{id:"p314",label:"MRE#314",distToNext:212,lat:34.32960,lng:-86.90470},{id:"p315",label:"MRE#315",distToNext:146,lat:34.32820,lng:-86.90450},{id:"p316",label:"MRE#316",distToNext:297,lat:34.32540,lng:-86.90430},{id:"p317",label:"DSPLC",distToNext:0,lat:34.32260,lng:-86.90410}]:(st==="Assigned"||st==="Unassigned")?(()=>{const pc=8+(i%5);const regionCoords={Alabama:{lat:34.37,lng:-86.91},"North Carolina":{lat:35.75,lng:-81.68},Virginia:{lat:37.27,lng:-79.94},Tennessee:{lat:35.97,lng:-83.92}};const base=regionCoords[rg]||regionCoords.Alabama;return Array.from({length:pc},(_,pi)=>({id:`p${i}-${pi}`,label:`P${pi+1}`,distToNext:pi<pc-1?80+((i+pi)*37)%220:0,lat:base.lat-(pi*0.0019)+((i*0.0003)%0.002),lng:base.lng+(pi*0.0002)+((i*0.0001)%0.001)}));})():null,
- messages:hasProd?[
- {id:"m"+i+"a",userId:lm?.id||"u3",text:["Production submitted, all good.","Had to reroute span 3.","Completed ahead of schedule!","Weather delay but got it done.","Smooth run, no issues."][i%5],ts:new Date(compDate.getTime()+3600000).toISOString()},
- {id:"m"+i+"b",userId:"u1",text:["Looks great, sending to redline.","Nice work, keep it up!","Got it, thanks.","Solid numbers this week.","Approved, moving forward."][i%5],ts:new Date(compDate.getTime()+7200000).toISOString()},
- ]:[],
- auditLog:(()=>{const log=[{action:"job_created",actor:"u1",actorName:"Admin User",ts:new Date(compDate.getTime()-7*DAY).toISOString(),detail:"Job created and assigned."}];
- if(st!=="Unassigned")log.push({action:"assigned",actor:"u2",actorName:"Sam Domaleski",ts:new Date(compDate.getTime()-6*DAY).toISOString(),detail:`Assigned to ${lm?.name||"lineman"}, truck ${TRUCKS[i%TRUCKS.length].id}.`,from:"Unassigned",to:"Assigned"});
- if(hasProd)log.push({action:"production_submitted",actor:lm?.id||"u3",actorName:lm?.name||"Matheus",ts:new Date(compDate.getTime()+3600000).toISOString(),detail:`Production submitted: ${2000+Math.floor(((i*97+i*i*13)%6000))} ft.`,from:"Assigned",to:"Pending Redlines"});
- if(hasRL)log.push({action:"redline_uploaded",actor:"u6",actorName:"Vanderson",ts:new Date(compDate.getTime()+5400000).toISOString(),detail:"Redline v1 uploaded. Totals confirmed.",from:"Pending Redlines",to:"Pending Redlines"},{action:"submitted_for_review",actor:"u6",actorName:"Vanderson",ts:new Date(compDate.getTime()+6000000).toISOString(),detail:"Submitted for client review.",from:"Pending Redlines",to:"Under Client Review"});
- if(isApp)log.push({action:"approved",actor:"u14",actorName:"Jean-Luc Beer",ts:new Date(compDate.getTime()+8000000).toISOString(),detail:`Approved with SR# ${1050000+i*31}.`,from:"Under Client Review",to:"Ready to Invoice"});
- if(st==="Rejected")log.push({action:"rejected",actor:"u14",actorName:"Jean-Luc Beer",ts:new Date(compDate.getTime()+8000000).toISOString(),detail:"Rejected: Span 2 footage mismatch. Re-verify.",from:"Under Client Review",to:"Rejected"});
- if(st==="Billed")log.push({action:"billed",actor:"u8",actorName:"Chris Kot",ts:new Date(compDate.getTime()+14*DAY).toISOString(),detail:"Marked as billed. Invoice sent.",from:"Ready to Invoice",to:"Billed"});
- return log;})(),
- documents:seedDocs(String(i+1).padStart(4,"0"),st,compDate,FEEDERS[i%FEEDERS.length],"aerial"),
- createdAt:new Date(compDate.getTime()-7*DAY).toISOString(),updatedAt:compDate.toISOString()});
- }
- // ── Underground seed jobs ──
- const ugForemen=USERS.filter(u=>u.role==="foreman");
- const ugRuns=["BSPD001.02E","BSPD002.01UG","SPEC001.01UG","BSPD003.02UG","APBB001.02UG"];
- for(let i=1;i<=20;i++){
- const cu=CUSTOMERS[i%3],rg=REGIONS[i%4],locs=LOCATIONS[rg]||["Unknown"];
- const st=i<=3?"Assigned":sts[(i-3)%sts.length];
- const fm=st==="Unassigned"?null:ugForemen[i%ugForemen.length];
- const hasProd=["Pending Redlines","Under Client Review","Ready to Invoice","Rejected","Billed"].includes(st);
- const hasRL=["Under Client Review","Ready to Invoice","Rejected","Billed"].includes(st);
- const isApp=["Ready to Invoice","Billed"].includes(st);
- let rls="Not Uploaded";if(hasRL&&st==="Under Client Review")rls="Under Review";else if(isApp)rls="Approved";else if(st==="Rejected")rls="Rejected";
- const daysBack=i<=5?Math.floor(i*0.6):i<=12?(i-5)*2.5:20+((i-12)*4);
- const compDate=new Date(now-(daysBack*DAY));
- const totalFeet=400+Math.floor(((i*83+i*i*7)%1600));
- const gts=["Normal","Normal","Cobble","Normal","Rock"];
- const gt=gts[i%gts.length];
- const drill=DRILLS[i%DRILLS.length];
- const dayCount=hasProd?1+(i%5):0;
- const ugProd=hasProd?{completedDate:compDate.toISOString().split("T")[0],totalFeet,groundType:gt,
- days:Array.from({length:dayCount},(_,d)=>{const dayFt=Math.round(totalFeet/dayCount);
- return{dayNum:d+1,date:new Date(compDate.getTime()-d*DAY).toISOString().split("T")[0],fullDay:true,halfDay:false,conduitFeet:dayFt,groundType:gt};
- }),submittedAt:new Date(compDate.getTime()+3600000).toISOString(),submittedBy:fm?.id||"u11",comments:i%4===0?"Hit cobble at 200ft, switched bit.":""}:null;
- const ugSub=i%4===0?"Illuminate":"NextGen Fiber";
- jobs.push({id:`${String(5001+i).padStart(4,"0")}`,department:"underground",subcontractor:ugSub,client:"MasTec",customer:cu,region:rg,location:locs[i%locs.length],olt:OLTS[i%OLTS.length],feederId:ugRuns[i%ugRuns.length],workType:"Underground Boring",
- scheduledDate:new Date(now-((daysBack+7)*DAY)).toISOString().split("T")[0],
- supervisorNotes:i%3===0?"Priority bore — road crossing.":"",
- assignedLineman:fm?.id||null,assignedTruck:null,truckInvestor:null,
- assignedDrill:fm?drill.id:null,drillInvestor:fm?drill.owner:null,
- status:st,redlineStatus:rls,srNumber:isApp?`${1060000+i*31}`:null,
- production:ugProd,
- redlines:hasRL?[{version:1,fileName:`Redline_${ugRuns[i%ugRuns.length]}_v1.pdf`,uploadedAt:new Date(compDate.getTime()+7200000).toISOString(),uploadedBy:"u6",notes:"Initial redline."}]:[],
- reviewNotes:st==="Rejected"?"Footage discrepancy — re-verify bore log.":"",
- confirmedTotals:hasRL?{totalFeet:totalFeet+([-20,-5,0,0,5,10][i%6]),confirmedBy:"u6",confirmedAt:new Date(compDate.getTime()+5400000).toISOString()}:null,
- billedAt:st==="Billed"?new Date(compDate.getTime()+14*86400000).toISOString():null,
- mapPdf:`Map_${ugRuns[i%ugRuns.length]}.pdf`,messages:[],
- documents:seedDocs(String(5001+i).padStart(4,"0"),st,compDate,ugRuns[i%ugRuns.length],"underground"),
- auditLog:(()=>{const log=[{action:"job_created",actor:"u1",actorName:"Admin User",ts:new Date(compDate.getTime()-7*DAY).toISOString(),detail:"Underground job created."}];
- if(st!=="Unassigned")log.push({action:"assigned",actor:"u2",actorName:"Sam Domaleski",ts:new Date(compDate.getTime()-6*DAY).toISOString(),detail:`Assigned to ${fm?.name||"foreman"}, drill ${drill.id}.`,from:"Unassigned",to:"Assigned"});
- if(hasProd)log.push({action:"production_submitted",actor:fm?.id||"u11",actorName:fm?.name||"Josh Grady",ts:new Date(compDate.getTime()+3600000).toISOString(),detail:`Production submitted: ${totalFeet} ft, ground type: ${gt}.`,from:"Assigned",to:"Pending Redlines"});
- if(hasRL)log.push({action:"redline_uploaded",actor:"u6",actorName:"Vanderson",ts:new Date(compDate.getTime()+5400000).toISOString(),detail:"Redline v1 uploaded. Totals confirmed.",from:"Pending Redlines",to:"Pending Redlines"},{action:"submitted_for_review",actor:"u6",actorName:"Vanderson",ts:new Date(compDate.getTime()+6000000).toISOString(),detail:"Submitted for client review.",from:"Pending Redlines",to:"Under Client Review"});
- if(isApp)log.push({action:"approved",actor:"u14",actorName:"Jean-Luc Beer",ts:new Date(compDate.getTime()+8000000).toISOString(),detail:`Approved with SR# ${1060000+i*31}.`,from:"Under Client Review",to:"Ready to Invoice"});
- if(st==="Rejected")log.push({action:"rejected",actor:"u14",actorName:"Jean-Luc Beer",ts:new Date(compDate.getTime()+8000000).toISOString(),detail:"Rejected: Footage discrepancy — re-verify bore log.",from:"Under Client Review",to:"Rejected"});
- if(st==="Billed")log.push({action:"billed",actor:"u8",actorName:"Chris Kot",ts:new Date(compDate.getTime()+14*DAY).toISOString(),detail:"Marked as billed.",from:"Ready to Invoice",to:"Billed"});
- return log;})(),
- createdAt:new Date(compDate.getTime()-7*DAY).toISOString(),updatedAt:compDate.toISOString()});
- }
- return jobs;
-}
+// genJobs removed — jobs loaded from backend via useJobs hook
 
 // ─── GPS Distance Calculator (Haversine) ────────────────────────────────────
 function gpsDistance(lat1,lon1,lat2,lon2){
@@ -3757,7 +3525,7 @@ function NavBtn({active,collapsed,onClick,title,icon,label,badge,sidebarTheme}){
 // ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 function Sidebar({view,setView,currentUser,onSwitch,sidebarOpen,setSidebarOpen,isMobile}){
  const ctx=useApp();
- const{jobs,rateCards,dark,setDark,trucks,drills,tickets}=useApp();
+ const{jobs,rateCards,dark,setDark,trucks,drills,tickets,onLogout}=useApp();
  const collapsed=isMobile?false:!sidebarOpen; // On mobile, sidebar is always "expanded" when shown
  const W=isMobile?280:(sidebarOpen?240:56);
  const sidebarTimerRef=React.useRef(null);
@@ -3868,7 +3636,7 @@ function Sidebar({view,setView,currentUser,onSwitch,sidebarOpen,setSidebarOpen,i
  {!collapsed&&<div style={{opacity:sidebarOpen?1:0,transition:"opacity 0.18s ease 0.04s"}}><div style={{fontSize:14,letterSpacing:2,textTransform:"uppercase"}}><span style={{fontWeight:700,color:"#FFFFFF"}}>FIBER</span><span style={{fontWeight:400,color:"#666666"}}>LYTIC</span></div><div style={{fontSize:9,color:S.textDim,fontWeight:500,letterSpacing:0.6,textTransform:"uppercase",marginTop:2}}>Fiber Construction Operations</div></div>}
  </div>
  </div>
- <div style={{padding:collapsed?"16px 6px":"16px 10px",flex:1,transition:"padding 0.22s cubic-bezier(0.25, 0.1, 0.25, 1)"}}>
+ <div style={{padding:collapsed?"16px 6px":"16px 10px",flex:1,overflowY:"auto",overflowX:"hidden",transition:"padding 0.22s cubic-bezier(0.25, 0.1, 0.25, 1)"}}>
  {!collapsed&&<div style={{fontSize:10,color:S.textDim,fontWeight:600,padding:"0 8px",marginBottom:8,letterSpacing:0.8,textTransform:"uppercase",opacity:sidebarOpen?1:0,transition:"opacity 0.18s ease 0.04s"}}>Navigation</div>}
  {items.map(it=>{const a=view===it.k||(it.k==="jobs"&&view==="job_detail");
  const badge=0;
@@ -3893,7 +3661,7 @@ function Sidebar({view,setView,currentUser,onSwitch,sidebarOpen,setSidebarOpen,i
  </div>
  </button>
  {!collapsed&&<>
- <div style={{fontSize:10,color:S.textDim,fontWeight:600,marginBottom:8,letterSpacing:0.8,textTransform:"uppercase"}}>Switch Role (Demo)</div>
+ <div style={{fontSize:10,color:S.textDim,fontWeight:600,marginBottom:8,letterSpacing:0.8,textTransform:"uppercase"}}>Switch Role (Dev)</div>
  <select value={currentUser.id} onChange={e=>onSwitch(e.target.value)} style={{width:"100%",padding:"7px 10px",borderRadius:4,fontSize:12,background:S.input,color:S.text,border:`1px solid ${S.border}`,cursor:"pointer"}}>
  {USERS.map(u=><option key={u.id} value={u.id}>{u.name} ({u.role.replace("_"," ")})</option>)}
  </select>
@@ -3901,14 +3669,18 @@ function Sidebar({view,setView,currentUser,onSwitch,sidebarOpen,setSidebarOpen,i
  <div style={{width:28,height:28,borderRadius:5,background:S.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:S.accent}}>
  {currentUser.name.split(" ").map(n=>n[0]).join("")}
  </div>
- <div><div style={{fontSize:12,fontWeight:600,color:S.text}}>{currentUser.name}</div><div style={{fontSize:10,color:S.textDim}}>{currentUser.role.replace("_"," ")}</div></div>
+ <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600,color:S.text}}>{currentUser.name}</div><div style={{fontSize:10,color:S.textDim}}>{currentUser.role.replace("_"," ")}</div></div>
  </div>
  </>}
- {collapsed&&<div style={{display:"flex",justifyContent:"center",marginTop:4}}>
- <div style={{width:28,height:28,borderRadius:5,background:S.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:S.accent}}>
+ {collapsed&&<div style={{display:"flex",justifyContent:"center",marginTop:4,marginBottom:8}}>
+ <div style={{width:28,height:28,borderRadius:5,background:S.accentSoft,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:S.accent}} title={currentUser.name}>
  {currentUser.name.split(" ").map(n=>n[0]).join("")}
  </div>
  </div>}
+ {onLogout&&<button onClick={e=>{e.stopPropagation();onLogout();}} title="Sign Out" style={{width:"100%",display:"flex",alignItems:"center",justifyContent:collapsed?"center":"flex-start",gap:8,padding:collapsed?"8px 0":"8px 10px",marginTop:8,background:"transparent",border:`1px solid ${S.border}`,borderRadius:5,color:"#F87171",fontSize:11,fontWeight:600,cursor:"pointer",transition:"background 0.15s"}} onMouseOver={e=>e.currentTarget.style.background="rgba(248,113,113,0.08)"} onMouseOut={e=>e.currentTarget.style.background="transparent"}>
+ <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#F87171" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+ {!collapsed&&<span>Sign Out</span>}
+ </button>}
  </div>
  </div></>;
 }
@@ -5791,48 +5563,7 @@ const SPLICE_PT_STATUS={
  codes_assigned:{c:"#4ADE80",bg:"rgba(74,222,128,0.10)",l:"Codes Assigned"},
  billed:{c:"#16A34A",bg:"rgba(22,163,74,0.10)",l:"Billed"},
 };
-function genSplicingProjects(){
- const DAY=86400000;const now=Date.now();
- const techs=[{id:"st1",name:"Misael"},{id:"st2",name:"Henrique"},{id:"st3",name:"Carlos"}];
- // ── Project 1: ADVLTNXA EAST (based on real data) ──
- const p1Points=[];
- // BSPD closures
- [{id:"BSPD001",codes:{BSPDSPL:3,BSPDFIBSPL:33}},{id:"BSPD001.01",codes:{BSPDSPL:1,BSPDFIBSPL:1}},{id:"BSPD001.01a",codes:{BSPDSPLTPA:1}},{id:"BSPD001.02a",codes:{BSPDSPL:1,BSPDFIBSPL:6}},{id:"BSPD001.02",codes:{BSPDSPLTPA:1}}].forEach((sp,i)=>{
-  const status=i<3?"codes_assigned":i<4?"ready_for_billing":"in_progress";
-  const photos=i<3?SPLICE_PHOTO_TYPES.filter(p=>p.required).map(p=>({type:p.key,fileName:`${sp.id}_${p.key}.jpg`,uploadedAt:new Date(now-(10-i)*DAY).toISOString(),uploadedBy:techs[i%3].id,techName:techs[i%3].name})):i<4?SPLICE_PHOTO_TYPES.filter(p=>p.required).slice(0,4).map(p=>({type:p.key,fileName:`${sp.id}_${p.key}.jpg`,uploadedAt:new Date(now-(8-i)*DAY).toISOString(),uploadedBy:techs[i%3].id,techName:techs[i%3].name})):[];
-  p1Points.push({id:sp.id,type:"bspd",status,tech:techs[i%3],date:new Date(now-(12-i)*DAY).toISOString().split("T")[0],codes:sp.codes,srNumber:status==="codes_assigned"?`SR${1070000+i*31}`:null,photos,notes:i===0?"Main distribution splice — 33 single fiber splices":"",fusionCount:(sp.codes.BSPDFIBSPL||0),ribbonCount:(sp.codes.BSPDRIBSPL||0)});
- });
- // TML terminals (1.1 through 8.2, matching the Excel data)
- for(let branch=1;branch<=8;branch++){
-  const subCount=branch===3?3:2;
-  for(let sub=1;sub<=subCount;sub++){
-   const id=`TML.001.${branch}.${sub}`;
-   const idx=(branch-1)*2+(sub-1);
-   const hasTap=!(branch===1&&sub===1)&&!(branch===4&&sub===1)&&!(branch===4&&sub===2)&&!(branch===7&&sub===1);
-   const codes={};
-   if(hasTap)codes.BSPDSPLTPA=1;
-   if(!(branch===1&&sub===1)&&!(branch===7&&sub===1))codes.BSPDSPL=1;
-   codes.BSPDTSTE=1;
-   const fibCount=sub===1?2:1;
-   codes.BSPDFIBSPL=fibCount;
-   const status=idx<12?"codes_assigned":idx<14?"ready_for_billing":idx<16?"in_progress":"not_started";
-   const photos=status==="codes_assigned"||status==="billed"?SPLICE_PHOTO_TYPES.filter(p=>p.required).map(p=>({type:p.key,fileName:`${id}_${p.key}.jpg`,uploadedAt:new Date(now-(14-idx)*DAY).toISOString(),uploadedBy:techs[idx%3].id,techName:techs[idx%3].name})):status==="ready_for_billing"?SPLICE_PHOTO_TYPES.filter(p=>p.required).slice(0,5).map(p=>({type:p.key,fileName:`${id}_${p.key}.jpg`,uploadedAt:new Date(now-(10-idx%5)*DAY).toISOString(),uploadedBy:techs[idx%3].id,techName:techs[idx%3].name})):[];
-   p1Points.push({id,type:"tml",status,tech:techs[idx%3],date:status!=="not_started"?new Date(now-(16-idx)*DAY).toISOString().split("T")[0]:null,codes,srNumber:status==="codes_assigned"?`SR${1075000+idx*17}`:null,photos,notes:"",fusionCount:fibCount,ribbonCount:0});
-  }
- }
- const proj1={id:"spl-001",wireCenter:"ADVLTNXA EAST",location:"Adamsville, TN",client:"MasTec",customer:"Brightspeed",map:"MAP-ADVLTNXA-EAST",status:"active",createdAt:new Date(now-30*DAY).toISOString(),splicePoints:p1Points,techs};
-
- // ── Project 2: FLVLALXA (Falkville) — smaller, earlier stage ──
- const p2Points=[];
- [{id:"BSPD002",type:"bspd"},{id:"BSPD002.01",type:"bspd"},{id:"TML.002.1.1",type:"tml"},{id:"TML.002.1.2",type:"tml"},{id:"TML.002.2.1",type:"tml"},{id:"TML.002.2.2",type:"tml"}].forEach((sp,i)=>{
-  const status=i<2?"in_progress":i<4?"not_started":"not_started";
-  const codes=sp.type==="bspd"?{BSPDSPL:1,BSPDFIBSPL:i===0?12:4}:{BSPDSPLTPA:1,BSPDSPL:1,BSPDTSTE:1,BSPDFIBSPL:i%2===0?2:1};
-  const photos=status==="in_progress"?SPLICE_PHOTO_TYPES.filter(p=>p.required).slice(0,3).map(p=>({type:p.key,fileName:`${sp.id}_${p.key}.jpg`,uploadedAt:new Date(now-5*DAY).toISOString(),uploadedBy:techs[1].id,techName:techs[1].name})):[];
-  p2Points.push({id:sp.id,type:sp.type,status,tech:status!=="not_started"?techs[1]:null,date:status!=="not_started"?new Date(now-5*DAY).toISOString().split("T")[0]:null,codes,srNumber:null,photos,notes:"",fusionCount:codes.BSPDFIBSPL||0,ribbonCount:0});
- });
- const proj2={id:"spl-002",wireCenter:"FLVLALXA",location:"Falkville, AL",client:"MasTec",customer:"Brightspeed",map:"MAP-FLVLALXA",status:"active",createdAt:new Date(now-10*DAY).toISOString(),splicePoints:p2Points,techs};
- return[proj1,proj2];
-}
+// genSplicingProjects removed — splicing data empty until backend model exists
 
 class SplicingErrorBoundary extends React.Component{
  constructor(props){super(props);this.state={hasError:false,error:null};}
@@ -5842,7 +5573,7 @@ class SplicingErrorBoundary extends React.Component{
 function SplicingView(){return <SplicingErrorBoundary><SplicingViewInner/></SplicingErrorBoundary>;}
 function SplicingViewInner(){
  const{currentUser}=useApp();
- const[projects,setProjects]=useState(genSplicingProjects);
+ const[projects,setProjects]=useState([]);
  const[selProject,setSelProject]=useState(null);
  const[selPoint,setSelPoint]=useState(null);
  const[tab,setTab]=useState("overview");
@@ -7164,12 +6895,30 @@ function SettingsView(){
  </div>;
 }
 
-export default function App(){
- const[jobs,setJobs]=useState(genJobs);
- const[rateCards,setRateCards]=useState(genRateCards);
- const[trucks,setTrucks]=useState([...TRUCKS]);
- const[drills,setDrills]=useState([...DRILLS]);
- const[currentUser,setCU]=useState(USERS[0]);
+// Map backend role to frontend role
+const ROLE_REVERSE_MAP={SUPER_ADMIN:"admin",PROJECT_MANAGER:"supervisor",FIELD_SUPERVISOR:"supervisor",FIELD_TECHNICIAN:"lineman",FINANCE:"billing",CLIENT_PORTAL:"client_manager"};
+function mapAuthUser(au){
+ if(!au)return{id:"unknown",name:"Unknown User",role:"admin",email:""};
+ // Try to find existing user by email (from backend-loaded USERS)
+ const existing=USERS.find(u=>u.email===au.email);
+ if(existing)return existing;
+ // Build a user object from backend data
+ return{id:au.id,name:`${au.firstName} ${au.lastName}`,role:ROLE_REVERSE_MAP[au.role]||"lineman",email:au.email,organizationId:au.organizationId};
+}
+
+export default function App({authUser,onLogout}){
+ // ─── Data from backend hooks ───────────────────────────────────────────────
+ const{jobs,setJobs,loading:jobsLoading,error:jobsError,fetchJobs,createJob:apiCreateJob,updateJob:apiUpdateJob}=useJobs();
+ const{users:backendUsers,loading:usersLoading,error:usersError}=useUsers();
+ const{rateCards,setRateCards,loading:rateCardsLoading,error:rateCardsError,fetchRateCards}=useRateCards();
+
+ // Update module-level USERS when backend data arrives
+ useEffect(()=>{if(backendUsers.length>0)USERS=backendUsers;},[backendUsers]);
+
+ // ─── Local-only state (no backend model yet) ───────────────────────────────
+ const[trucks,setTrucks]=useState([]);
+ const[drills,setDrills]=useState([]);
+ const[currentUser,setCU]=useState(()=>mapAuthUser(authUser));
  const[view,setView]=useState("dashboard");
  const[selectedJob,setSelectedJob]=useState(null);
  const[navFrom,setNavFrom]=useState(null);
@@ -7178,54 +6927,25 @@ export default function App(){
  const[sidebarOpen,setSidebarOpen]=useState(false);
  const[paidStubs,setPaidStubs]=useState({});
  const[payrollRuns,setPayrollRuns]=useState({});
- // Company config — what does this sub actually operate?
  const[companyConfig,setCompanyConfig]=useState({
-  departments:["aerial","underground"], // which departments are active
-  hasEquipmentOwners:true, // do they have external equipment owners (investors)?
-  equipmentOwnerLabel:"Investor", // what to call them — "Investor", "Owner", "Lessor", "Partner"
+  departments:["aerial","underground"],
+  hasEquipmentOwners:true,
+  equipmentOwnerLabel:"Investor",
   companyName:"NextGen Fiber",
-  // custom maintenance categories per equipment type
   truckMaintenance:["DOT Inspection","Insurance","Registration","Oil Change","Tire Inspection"],
   drillMaintenance:["Service","Hydraulic Inspection","Bit Replacement"],
   clientBilling:{"MasTec":{type:"portal",note:"Submit redlines in Oracle. Payment via Thalia."}},
  });
- const[bankAccounts,setBankAccounts]=useState(()=>{
- // Seed some users with bank info for demo
- const ba={};
- USERS.filter(u=>["lineman","foreman","supervisor"].includes(u.role)).forEach(u=>{
- ba[u.id]={bank:"Chase",routingLast4:"6789",accountLast4:String(1000+Math.floor(Math.random()*9000)).slice(-4),accountType:"checking",verified:true,addedAt:"2025-01-20T10:00:00Z"};
- });
- // Investors too
- USERS.filter(u=>u.role==="truck_investor"||u.role==="drill_investor").forEach(u=>{
- ba[u.id]={bank:"Wells Fargo",routingLast4:"4321",accountLast4:String(1000+Math.floor(Math.random()*9000)).slice(-4),accountType:"checking",verified:true,addedAt:"2025-02-10T10:00:00Z"};
- });
- return ba;
- });
+ const[bankAccounts,setBankAccounts]=useState({});
  T=dark?DARK:LIGHT;
- const[pickups,setPickups]=useState(genPickups);
+ const[pickups,setPickups]=useState([]);
  const[materialMode,setMaterialMode]=useState("client");
  const[invoices,setInvoices]=useState([]);
- const[tickets,setTickets]=useState([
- {id:'TK-0001',subject:'TRK-102 broke down — crew delayed',region:'Alabama',customer:'Brightspeed',priority:'high',status:'Acknowledged',createdBy:'Admin User',createdByRole:'admin',createdAt:'2026-02-12T15:12:00Z',relatedJob:'BSPD001.04H',assignedTo:'u1',messages:[
- {id:'tm1a',from:'Admin User',role:'admin',text:'TRK-102 broke down around 3pm near Falkville. Crew could not finish BSPD001.04H. Getting it to the shop — will reassign TRK-105 if needed. Update by 6pm.',ts:'2026-02-12T15:12:00Z'},
- {id:'tm1b',from:'Jean-Luc Beer',role:'client_manager',text:'Thanks for the heads up. How much was left?',ts:'2026-02-12T15:28:00Z'},
- {id:'tm1c',from:'Admin User',role:'admin',text:'About 1,200 ft. Matheus will be first on it tomorrow.',ts:'2026-02-12T15:35:00Z'},
- {id:'tm1d',from:'Jean-Luc Beer',role:'client_manager',text:'Acknowledged — keep me posted. Done by Friday is fine.',ts:'2026-02-12T15:42:00Z'}]},
- {id:'TK-0002',subject:'Permitting hold — BSPD002.03B',region:'Alabama',customer:'Brightspeed',priority:'urgent',status:'Open',createdBy:'Admin User',createdByRole:'admin',createdAt:'2026-02-12T10:30:00Z',relatedJob:'BSPD002.03B',assignedTo:'u1',messages:[
- {id:'tm2a',from:'Admin User',role:'admin',text:'County inspector stopped crew on BSPD002.03B — permit not renewed. Crew pulled off. Can your permitting team check?',ts:'2026-02-12T10:30:00Z'}]},
- {id:'TK-0003',subject:'Weather delay — NC crews stood down',region:'North Carolina',customer:'Brightspeed',priority:'normal',status:'Resolved',createdBy:'Sam Domaleski',createdByRole:'supervisor',createdAt:'2026-02-11T07:45:00Z',relatedJob:null,assignedTo:'u2',messages:[
- {id:'tm3a',from:'Sam Domaleski',role:'supervisor',text:'Ice storm warning. All crews standing down today.',ts:'2026-02-11T07:45:00Z'},
- {id:'tm3b',from:'Jean-Luc Beer',role:'client_manager',text:'Safety first. Keep me posted.',ts:'2026-02-11T08:10:00Z'},
- {id:'tm3c',from:'Sam Domaleski',role:'supervisor',text:'Roads clear. All crews back out.',ts:'2026-02-12T07:30:00Z'},
- {id:'tm3d',from:'Jean-Luc Beer',role:'client_manager',text:'Resolved. Thanks.',ts:'2026-02-12T08:00:00Z'}]},
- {id:'TK-0004',subject:'Pole #4412 rotted — replacement needed',region:'Alabama',customer:'Brightspeed',priority:'high',status:'Open',createdBy:'Sam Domaleski',createdByRole:'supervisor',createdAt:'2026-02-10T14:20:00Z',relatedJob:'BSPD001.01G',assignedTo:'u2',messages:[
- {id:'tm4a',from:'Sam Domaleski',role:'supervisor',text:'Near-miss on pole #4412 — rotted at base. Donaldo safe. Flagged pole and 3 adjacent.',ts:'2026-02-10T14:20:00Z'},
- {id:'tm4b',from:'Admin User',role:'admin',text:'Photos in job file. Need MasTec to file replacement order.',ts:'2026-02-10T14:45:00Z'}]},
- {id:'TK-0005',subject:'96ct fiber shortage at warehouse',region:'Alabama',customer:'Brightspeed',priority:'normal',status:'Resolved',createdBy:'Admin User',createdByRole:'admin',createdAt:'2026-02-07T09:00:00Z',relatedJob:null,assignedTo:'u1',messages:[
- {id:'tm5a',from:'Admin User',role:'admin',text:'Only 2 spools of 96ct. Need 6 this week.',ts:'2026-02-07T09:00:00Z'},
- {id:'tm5b',from:'Jean-Luc Beer',role:'client_manager',text:'Shipment Wednesday. Reserving 8 spools.',ts:'2026-02-07T09:50:00Z'},
- {id:'tm5c',from:'Admin User',role:'admin',text:'Picked up. All good.',ts:'2026-02-09T11:00:00Z'}]}
- ]);
+ const[tickets,setTickets]=useState([]);
+
+ // ─── Loading overlay ─────────────────────────────────────────────────────
+ const dataLoading=jobsLoading||usersLoading||rateCardsLoading;
+ const dataError=jobsError||usersError||rateCardsError;
 
 
  const onSwitch=useCallback(uid=>{
@@ -7324,7 +7044,7 @@ export default function App(){
  const[isMobile,setIsMobile]=useState(typeof window!=='undefined'&&window.innerWidth<768);
  useEffect(()=>{const h=()=>setIsMobile(window.innerWidth<768);window.addEventListener('resize',h);return()=>window.removeEventListener('resize',h);},[]);
 
- const ctx={jobs,setJobs,rateCards,setRateCards,currentUser,view,setView,selectedJob,setSelectedJob,dark,setDark,paidStubs,setPaidStubs,payrollRuns,setPayrollRuns,bankAccounts,setBankAccounts,trucks,setTrucks,drills,setDrills,pickups,setPickups,materialMode,setMaterialMode,invoices,setInvoices,tickets,setTickets,navFrom,setNavFrom,jobsPreFilter,setJobsPreFilter,clientSubFilter,setClientSubFilter,clientDetailOpen,setClientDetailOpen,companyConfig,setCompanyConfig,notifications:myNotifs,unreadCount,isMobile};
+ const ctx={jobs,setJobs,rateCards,setRateCards,currentUser,view,setView,selectedJob,setSelectedJob,dark,setDark,paidStubs,setPaidStubs,payrollRuns,setPayrollRuns,bankAccounts,setBankAccounts,trucks,setTrucks,drills,setDrills,pickups,setPickups,materialMode,setMaterialMode,invoices,setInvoices,tickets,setTickets,navFrom,setNavFrom,jobsPreFilter,setJobsPreFilter,clientSubFilter,setClientSubFilter,clientDetailOpen,setClientDetailOpen,companyConfig,setCompanyConfig,notifications:myNotifs,unreadCount,isMobile,onLogout,dataLoading,dataError,fetchJobs,fetchRateCards,apiCreateJob,apiUpdateJob,users:USERS};
 
 
  // DrillsView and TrucksView are defined at module level (above App)
@@ -8289,6 +8009,16 @@ export default function App(){
  @keyframes pulse{0%,100%{transform:scale(1);}50%{transform:scale(1.15);}}
  @media(max-width:767px){body{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;}table{font-size:12px;}td,th{padding:8px 6px !important;}div::-webkit-scrollbar{display:none;}}
  `}</style>
+ {/* ── Loading / Error overlay ── */}
+ {dataLoading&&<div style={{position:"fixed",inset:0,zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",background:T.bg,flexDirection:"column",gap:16}}>
+  <div style={{width:36,height:36,border:`3px solid ${T.border}`,borderTopColor:T.accent,borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+  <span style={{color:T.textMuted,fontSize:13,fontWeight:500}}>Loading data...</span>
+ </div>}
+ {dataError&&!dataLoading&&<div style={{position:"fixed",inset:0,zIndex:9998,display:"flex",alignItems:"center",justifyContent:"center",background:T.bg,flexDirection:"column",gap:12}}>
+  <span style={{color:T.danger,fontSize:14,fontWeight:600}}>Failed to load data</span>
+  <span style={{color:T.textMuted,fontSize:12,maxWidth:400,textAlign:"center"}}>{dataError}</span>
+  <button onClick={()=>{fetchJobs();fetchRateCards();}} style={{marginTop:8,padding:"8px 20px",borderRadius:6,background:T.accent,color:"#fff",border:"none",cursor:"pointer",fontSize:13,fontWeight:600}}>Retry</button>
+ </div>}
  <><Sidebar view={view} setView={v=>{setNavFrom(null);setJobsPreFilter("");setClientDetailOpen(false);setView(v);if(isMobile)setSidebarOpen(false);}} currentUser={currentUser} onSwitch={onSwitch} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} isMobile={isMobile}/>
  <main style={{marginLeft:isMobile?0:56,padding:isMobile?"16px 12px":"24px 28px",paddingTop:isMobile?60:24,minHeight:"100vh",position:"relative"}}>
  {/* ── MOBILE HEADER BAR ── */}
