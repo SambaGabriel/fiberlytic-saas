@@ -1794,7 +1794,7 @@ function JobsMgmt(){
 
 // ─── JOB DETAIL ──────────────────────────────────────────────────────────────
 function JobDetail({job:jobProp,inline}={})  {
- const{selectedJob,setSelectedJob,setView,jobs,setJobs,rateCards,currentUser,apiUpdateJob}=useApp();
+ const{selectedJob,setSelectedJob,setView,jobs,setJobs,rateCards,currentUser,apiUpdateJob,isMobile:_m}=useApp();
  const[tab,setTab]=useState(currentUser.role==="redline_specialist"?"redlines":(currentUser.role==="lineman"||currentUser.role==="foreman")&&!(jobProp||selectedJob)?.production?"production":"info");
  const emptyProdRow=()=>({spanWorkType:"S+F",strandSpan:"",anchora:false,fiberMarking:"",coil:false,poleTransfer:false,snowshoe:false});
  const[prodRows,setProdRows]=useState(()=>Array.from({length:12},()=>emptyProdRow()));
