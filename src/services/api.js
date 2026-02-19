@@ -260,6 +260,23 @@ const api = {
   getClientProjects: () => api.get('/client-portal/projects'),
   getClientInvoices: () => api.get('/client-portal/invoices'),
 
+  // File upload (uses FormData — no Content-Type header)
+  uploadFile: async (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    const { accessToken } = getTokens();
+    const res = await fetch(`${API_BASE}/uploads`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new ApiError(body.message || 'Upload failed', res.status, body);
+    }
+    return res.json();
+  },
+
   // Raw fetch for custom needs
   fetch: apiFetch,
   ApiError,

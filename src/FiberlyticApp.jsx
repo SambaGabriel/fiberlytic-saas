@@ -4,6 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import useJobs from "./hooks/useJobs.js";
 import useUsers from "./hooks/useUsers.js";
 import useRateCards from "./hooks/useRateCards.js";
+import api from "./services/api.js";
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const DARK = {
@@ -993,7 +994,7 @@ function Dashboard(){
 
 // ─── RATE CARDS VIEW ─────────────────────────────────────────────────────────
 function RateCardsView(){
- const{rateCards,setRateCards}=useApp();
+ const{rateCards,setRateCards,fetchRateCards}=useApp();
  const[sel,setSel]=useState(null);const[prof,setProf]=useState("NextGen Default");
  const[editM,setEditM]=useState(null);const[editV,setEditV]=useState("");const[impM,setImpM]=useState(false);
  const[showCreate,setShowCreate]=useState(false);
@@ -1015,10 +1016,14 @@ function RateCardsView(){
  const p={...g.profiles};const pr={...p[pn]};
  pr[code]={...pr[code],[field]:parseFloat(editV)||0};p[pn]=pr;g.profiles=p;
  g.changeLog=[...(g.changeLog||[]),`Updated ${code} ${field} in ${pn} to ${editV}`];
+ // Persist rate change to backend
+ const codeObj=g.codes.find(c=>c.code===code);
+ const backendId=codeObj?.backendId;
+ if(backendId){const dto={};if(field==='nextgenRate')dto.clientRate=parseFloat(editV)||0;if(field==='linemanRate')dto.crewRate=parseFloat(editV)||0;if(field==='investorRate')dto.materialCost=parseFloat(editV)||0;api.patch(`/rate-cards/${backendId}`,dto).catch(e=>console.error('Failed to update rate:',e));}
  }
  g.version=(g.version||1)+1;g.uploadedAt=new Date().toISOString();nc[gk]=g;setRateCards(nc);setEditM(null);};
 
- const createRateCard=()=>{
+ const createRateCard=async()=>{
  if(!newRC.client.trim()||!newRC.customer.trim()||!newRC.region.trim())return;
  const k=`${newRC.client}|${newRC.customer}|${newRC.region}`;
  if(rateCards[k])return;
@@ -1026,9 +1031,11 @@ function RateCardsView(){
  nc[k]={id:k,client:newRC.client,customer:newRC.customer,region:newRC.region,codes:[],
  profiles:{"NextGen Default":{}},uploadedBy:"Admin User",uploadedAt:new Date().toISOString(),version:1,changeLog:["Rate card created"]};
  setRateCards(nc);setShowCreate(false);setNewRC({client:"",customer:"",region:""});setSel(k);
+ // Persist placeholder to backend
+ try{await api.post('/rate-cards',{name:`${newRC.client}|${newRC.customer}|${newRC.region}`,category:'STRAND',unit:'per foot',clientRate:0,crewRate:0,effectiveFrom:new Date().toISOString()});}catch(e){console.error('Failed to create rate card:',e);}
  };
 
- const addCode=()=>{
+ const addCode=async()=>{
  if(!newCode.code.trim()||!sel)return;
  const nc={...rateCards};const g={...nc[sel]};
  if(g.codes.some(c=>c.code===newCode.code))return;
@@ -1037,14 +1044,19 @@ function RateCardsView(){
  g.changeLog=[...(g.changeLog||[]),`Added code ${newCode.code}`];
  g.version=(g.version||1)+1;g.uploadedAt=new Date().toISOString();nc[sel]=g;setRateCards(nc);
  setShowAddCode(false);setNewCode({code:"",description:"",mapsTo:"",unit:"per foot"});
+ // Persist new code to backend
+ try{await api.post('/rate-cards',{name:`${g.customer} - ${newCode.code}`,category:newCode.code,unit:newCode.unit||'per foot',clientRate:0,crewRate:0,effectiveFrom:new Date().toISOString()});}catch(e){console.error('Failed to add rate card code:',e);}
  };
 
  const deleteCode=(code)=>{
  if(!sel)return;const nc={...rateCards};const g={...nc[sel]};
+ const codeObj=g.codes.find(c=>c.code===code);
  g.codes=g.codes.filter(c=>c.code!==code);
  Object.keys(g.profiles).forEach(pn=>{const p={...g.profiles[pn]};delete p[code];g.profiles[pn]=p;});
  g.changeLog=[...(g.changeLog||[]),`Deleted code ${code}`];
  g.version=(g.version||1)+1;g.uploadedAt=new Date().toISOString();nc[sel]=g;setRateCards(nc);
+ // Persist deletion to backend
+ if(codeObj?.backendId){api.del(`/rate-cards/${codeObj.backendId}`).catch(e=>console.error('Failed to delete rate card code:',e));}
  };
 
  const[openClients,setOpenClients]=useState({});
@@ -1238,7 +1250,7 @@ function RateCardsView(){
 
 // ─── JOBS MANAGEMENT ─────────────────────────────────────────────────────────
 function JobsMgmt(){
- const{jobs,setJobs,rateCards,currentUser,setView,setSelectedJob,trucks,drills,jobsPreFilter,setJobsPreFilter,isMobile:_m}=useApp();
+ const{jobs,setJobs,rateCards,currentUser,setView,setSelectedJob,trucks,drills,jobsPreFilter,setJobsPreFilter,isMobile:_m,apiCreateJob}=useApp();
  const[fl,setFl]=useState({status:jobsPreFilter||( currentUser.role==="billing"?"Ready to Invoice":""),customer:"",search:"",fin:""});
  const[showC,setShowC]=useState(false);
  const[expandedJobId,setExpandedJobId]=useState(null);
@@ -1261,29 +1273,28 @@ function JobsMgmt(){
  return f;
  },[jobs,fl,currentUser,rateCards]);
 
- const handleC=()=>{
+ const handleC=async()=>{
  const isUG=nj.department==="underground";
+ // Upload map PDF first if present
+ let mapPdfUrl=nj.mapPdf||null;
+ if(nj.mapPdfFile){try{const up=await api.uploadFile(nj.mapPdfFile);mapPdfUrl=up.url;}catch(e){console.error('Map PDF upload failed:',e);}}
  const maxId=Math.max(...jobs.map(j=>parseInt(j.id)||0),0);
  const newId=String(maxId+1).padStart(4,"0");
+ const baseJob={...nj,id:newId,estimatedFootage:0,
+ assignedLineman:nj.assignedLineman||null,
+ status:nj.assignedLineman?"Assigned":"Unassigned",
+ redlineStatus:"Not Uploaded",srNumber:null,production:null,confirmedTotals:null,billedAt:null,redlines:[],reviewNotes:"",messages:[],
+ mapPdf:mapPdfUrl,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+ let job;
  if(isUG){
  const drill=drills.find(d=>d.id===nj.assignedDrill);
- const job={...nj,id:newId,workType:"Underground Boring",estimatedFootage:0,
- assignedLineman:nj.assignedLineman||null,assignedDrill:nj.assignedDrill||null,
- drillInvestor:drill?.investorName||null,assignedTruck:null,truckInvestor:null,
- status:nj.assignedLineman?"Assigned":"Unassigned",
- redlineStatus:"Not Uploaded",srNumber:null,production:null,confirmedTotals:null,billedAt:null,redlines:[],reviewNotes:"",messages:[],
- mapPdf:nj.mapPdf||null,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
- setJobs([job,...jobs]);
+ job={...baseJob,workType:"Underground Boring",assignedDrill:nj.assignedDrill||null,drillInvestor:drill?.investorName||null,assignedTruck:null,truckInvestor:null};
  } else {
  const truck=trucks.find(t=>t.id===nj.assignedTruck);
- const job={...nj,id:newId,workType:"",estimatedFootage:0,
- assignedLineman:nj.assignedLineman||null,assignedTruck:nj.assignedTruck||null,
- truckInvestor:truck?truck.owner:null,assignedDrill:null,drillInvestor:null,
- status:nj.assignedLineman?"Assigned":"Unassigned",
- redlineStatus:"Not Uploaded",srNumber:null,production:null,confirmedTotals:null,billedAt:null,redlines:[],reviewNotes:"",messages:[],
- mapPdf:nj.mapPdf||null,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
- setJobs([job,...jobs]);
+ job={...baseJob,workType:"",assignedTruck:nj.assignedTruck||null,truckInvestor:truck?truck.owner:null,assignedDrill:null,drillInvestor:null};
  }
+ // Persist to backend
+ try{const created=await apiCreateJob(job);setJobs(prev=>[created,...prev.filter(j=>j.id!==created.id)]);}catch(e){console.error('Failed to create job:',e);setJobs([job,...jobs]);}
  setShowC(false);
  setNj({department:"aerial",client:"MasTec",customer:"",region:"",location:"",olt:"",feederId:"",supervisorNotes:"",assignedLineman:"",assignedTruck:"",assignedDrill:""});
  };
@@ -1758,14 +1769,15 @@ function JobsMgmt(){
  {/* Map PDF Upload */}
  <div style={{marginTop:8,marginBottom:8}}>
  <label style={{fontSize:12,fontWeight:600,color:T.textMuted,display:"block",marginBottom:6}}>Map PDF</label>
- <div onClick={()=>setNj({...nj,mapPdf:nj.mapPdf?null:`Map_${nj.feederId||"Job"}.pdf`})}
+ <input type="file" accept=".pdf" id="map-pdf-upload" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f){setNj({...nj,mapPdf:f.name,mapPdfFile:f});}e.target.value="";}}/>
+ <div onClick={()=>{if(nj.mapPdf){setNj({...nj,mapPdf:null,mapPdfFile:null});}else{document.getElementById("map-pdf-upload")?.click();}}}
  style={{padding:20,border:`2px dashed ${nj.mapPdf?T.success:T.border}`,borderRadius:4,textAlign:"center",cursor:"pointer",background:nj.mapPdf?T.successSoft:"transparent",transition:"all 0.15s"}}>
  {nj.mapPdf?<div>
- <span style={{fontSize:22}}></span>
+ <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={T.success} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:"inline-block"}}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
  <div style={{fontSize:13,fontWeight:600,color:T.success,marginTop:4}}>{nj.mapPdf}</div>
  <div style={{fontSize:11,color:T.textMuted,marginTop:2}}>Click to remove</div>
  </div>:<div>
- <span style={{fontSize:28}}></span>
+ <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={T.textMuted} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{display:"inline-block"}}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
  <div style={{fontSize:13,color:T.textMuted,marginTop:4}}>Upload map PDF for lineman</div>
  <div style={{fontSize:11,color:T.textDim,marginTop:2}}>Supports feeder, poles, and span maps</div>
  </div>}
@@ -1782,7 +1794,7 @@ function JobsMgmt(){
 
 // ─── JOB DETAIL ──────────────────────────────────────────────────────────────
 function JobDetail({job:jobProp,inline}={})  {
- const{selectedJob,setSelectedJob,setView,jobs,setJobs,rateCards,currentUser}=useApp();
+ const{selectedJob,setSelectedJob,setView,jobs,setJobs,rateCards,currentUser,apiUpdateJob}=useApp();
  const[tab,setTab]=useState(currentUser.role==="redline_specialist"?"redlines":(currentUser.role==="lineman"||currentUser.role==="foreman")&&!(jobProp||selectedJob)?.production?"production":"info");
  const emptyProdRow=()=>({spanWorkType:"S+F",strandSpan:"",anchora:false,fiberMarking:"",coil:false,poleTransfer:false,snowshoe:false});
  const[prodRows,setProdRows]=useState(()=>Array.from({length:12},()=>emptyProdRow()));
@@ -1792,7 +1804,7 @@ function JobDetail({job:jobProp,inline}={})  {
  const updUgDay=(i,k,v)=>{const n=[...ugDays];n[i]={...n[i],[k]:v};setUgDays(n);};
  const remUgDay=(i)=>{if(ugDays.length>1)setUgDays(ugDays.filter((_,j)=>j!==i));};
  const[pf,setPf]=useState({completedDate:"",comments:""});
- const[rn,setRn]=useState("");const[ra,setRa]=useState("");const[sri,setSri]=useState("");const[rjn,setRjn]=useState("");
+ const[rn,setRn]=useState("");const[ra,setRa]=useState("");const[sri,setSri]=useState("");const[rjn,setRjn]=useState("");const[rlFile,setRlFile]=useState(null);
  const[chatMsg,setChatMsg]=useState("");
  const[prodMapOpen,setProdMapOpen]=useState(false);
  // Document vault state
@@ -1825,7 +1837,7 @@ function JobDetail({job:jobProp,inline}={})  {
  },[prodRows]);
 
  const isUG=j.department==="underground";
- const upd=(u,auditEntry)=>{const log=[...(j.auditLog||[])];if(auditEntry)log.push({...auditEntry,ts:new Date().toISOString(),actor:currentUser.id,actorName:currentUser.name});const up={...j,...u,auditLog:log,updatedAt:new Date().toISOString()};setJobs(prev=>prev.map(x=>x.id===j.id?up:x));if(!inline)setSelectedJob(up);};
+ const upd=(u,auditEntry)=>{const log=[...(j.auditLog||[])];if(auditEntry)log.push({...auditEntry,ts:new Date().toISOString(),actor:currentUser.id,actorName:currentUser.name});const up={...j,...u,auditLog:log,updatedAt:new Date().toISOString()};setJobs(prev=>prev.map(x=>x.id===j.id?up:x));if(!inline)setSelectedJob(up);apiUpdateJob(j.id,u).catch(e=>console.error('Failed to persist job update:',e));};
  const subProd=()=>{
  if(isUG){
  // Underground production submission
@@ -1848,8 +1860,11 @@ function JobDetail({job:jobProp,inline}={})  {
  upd({production:p,workType:"Strand",status:"Pending Redlines"},{action:"production_submitted",detail:`Aerial production submitted: ${prodTotals.totalFeet} ft, ${filledRows.length} spans.`,from:j.status,to:"Pending Redlines"});setTab("production");
  }
  };
- const upRL=()=>{
- const r={version:(j.redlines?.length||0)+1,fileName:`Redline_${j.feederId}_v${(j.redlines?.length||0)+1}.pdf`,uploadedAt:new Date().toISOString(),uploadedBy:currentUser.id,notes:rn};
+ const upRL=async()=>{
+ // Upload actual file if provided
+ let fileUrl=null;
+ if(rlFile){try{const up=await api.uploadFile(rlFile);fileUrl=up.url;}catch(e){console.error('Redline file upload failed:',e);}}
+ const r={version:(j.redlines?.length||0)+1,fileName:rlFile?.name||`Redline_${j.feederId}_v${(j.redlines?.length||0)+1}.pdf`,fileUrl,uploadedAt:new Date().toISOString(),uploadedBy:currentUser.id,notes:rn};
  let confirmed;
  if(isUG){
  const days=j.production?.days||[];
@@ -1871,7 +1886,7 @@ function JobDetail({job:jobProp,inline}={})  {
  confirmed={totalFeet:cStrand+cOverlash+cFiber+cConduit,totalStrand:cStrand,totalOverlash:cOverlash,totalFiber:cFiber,totalConduit:cConduit,
  anchors:parseInt(ct.anchors)||j.production?.anchors||0,coils:parseInt(ct.coils)||j.production?.coils||0,snowshoes:parseInt(ct.snowshoes)||j.production?.snowshoes||0,entries:0,confirmedBy:currentUser.id,confirmedAt:new Date().toISOString()};
  }
- upd({redlines:[...(j.redlines||[]),r],confirmedTotals:confirmed,redlineStatus:"Uploaded",status:"Pending Redlines"},{action:"redline_uploaded",detail:`Redline v${(j.redlines?.length||0)+1} uploaded. Confirmed totals: ${confirmed.totalFeet} ft.${rn?` Notes: ${rn}`:""}`});setRn("");setCt({strand:"",overlash:"",fiber:"",conduit:"",anchors:"",coils:"",snowshoes:"",dbNormal:"",dbCobble:"",dbRock:""});
+ upd({redlines:[...(j.redlines||[]),r],confirmedTotals:confirmed,redlineStatus:"Uploaded",status:"Pending Redlines"},{action:"redline_uploaded",detail:`Redline v${(j.redlines?.length||0)+1} uploaded. Confirmed totals: ${confirmed.totalFeet} ft.${rn?` Notes: ${rn}`:""}`});setRn("");setRlFile(null);setCt({strand:"",overlash:"",fiber:"",conduit:"",anchors:"",coils:"",snowshoes:"",dbNormal:"",dbCobble:"",dbRock:""});
  };
  const subRev=()=>upd({redlineStatus:"Under Review",status:"Under Client Review"},{action:"submitted_for_review",detail:"Submitted for client review.",from:j.status,to:"Under Client Review"});
  const appJ=()=>{if(!sri)return;upd({status:"Ready to Invoice",redlineStatus:"Approved",srNumber:sri},{action:"approved",detail:`Approved with SR# ${sri}.${ra?` Notes: ${ra}`:""}`,from:j.status,to:"Ready to Invoice"});setRa("");setSri("");};
@@ -1979,10 +1994,10 @@ function JobDetail({job:jobProp,inline}={})  {
  <span style={{fontSize:16,color:T.accent,transition:"transform 0.2s",transform:prodMapOpen?"rotate(180deg)":"rotate(0)"}}>{prodMapOpen?"▲":"▼"}</span>
  </button>
  {prodMapOpen&&<div style={{borderTop:`1px solid ${T.border}`}}>
- <iframe src={`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} style={{width:"100%",height:400,border:"none",display:"block"}} title="Construction Map PDF"/>
+ <iframe src={j.mapPdf?.startsWith('/uploads/')?j.mapPdf:`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} style={{width:"100%",height:400,border:"none",display:"block"}} title="Construction Map PDF"/>
  <div style={{display:"flex",gap:8,padding:"8px 12px"}}>
- <a href={`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} target="_blank" rel="noopener noreferrer" style={{flex:1,padding:"8px 0",borderRadius:4,background:T.accentSoft,border:`1px solid ${T.accent}30`,color:T.accent,fontSize:12,fontWeight:700,cursor:"pointer",textAlign:"center",textDecoration:"none"}}>Open Full Screen</a>
- <a href={`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} download style={{flex:1,padding:"8px 0",borderRadius:4,background:T.bgInput,border:`1px solid ${T.border}`,color:T.textMuted,fontSize:12,fontWeight:700,cursor:"pointer",textAlign:"center",textDecoration:"none"}}>Download PDF</a>
+ <a href={j.mapPdf?.startsWith('/uploads/')?j.mapPdf:`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} target="_blank" rel="noopener noreferrer" style={{flex:1,padding:"8px 0",borderRadius:4,background:T.accentSoft,border:`1px solid ${T.accent}30`,color:T.accent,fontSize:12,fontWeight:700,cursor:"pointer",textAlign:"center",textDecoration:"none"}}>Open Full Screen</a>
+ <a href={j.mapPdf?.startsWith('/uploads/')?j.mapPdf:`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} download style={{flex:1,padding:"8px 0",borderRadius:4,background:T.bgInput,border:`1px solid ${T.border}`,color:T.textMuted,fontSize:12,fontWeight:700,cursor:"pointer",textAlign:"center",textDecoration:"none"}}>Download PDF</a>
  </div>
  </div>}
  </Card>
@@ -2394,10 +2409,10 @@ function JobDetail({job:jobProp,inline}={})  {
  <span style={{fontSize:14,color:T.accent}}>{prodMapOpen?"▲":"▼"}</span>
  </button>
  {prodMapOpen&&<div style={{borderTop:`1px solid ${T.border}`}}>
- <iframe src={`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} style={{width:"100%",height:380,border:"none",display:"block"}} title="Construction Map PDF"/>
+ <iframe src={j.mapPdf?.startsWith('/uploads/')?j.mapPdf:`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} style={{width:"100%",height:380,border:"none",display:"block"}} title="Construction Map PDF"/>
  <div style={{display:"flex",gap:6,padding:"8px 10px"}}>
- <a href={`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} target="_blank" rel="noopener noreferrer" style={{flex:1,padding:"8px 0",borderRadius:4,background:T.accentSoft,border:`1px solid ${T.accent}30`,color:T.accent,fontSize:11,fontWeight:700,cursor:"pointer",textAlign:"center",textDecoration:"none"}}>Open Full Screen</a>
- <a href={`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} download style={{flex:1,padding:"8px 0",borderRadius:4,background:T.bgInput,border:`1px solid ${T.border}`,color:T.textMuted,fontSize:11,fontWeight:700,cursor:"pointer",textAlign:"center",textDecoration:"none"}}>Download PDF</a>
+ <a href={j.mapPdf?.startsWith('/uploads/')?j.mapPdf:`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} target="_blank" rel="noopener noreferrer" style={{flex:1,padding:"8px 0",borderRadius:4,background:T.accentSoft,border:`1px solid ${T.accent}30`,color:T.accent,fontSize:11,fontWeight:700,cursor:"pointer",textAlign:"center",textDecoration:"none"}}>Open Full Screen</a>
+ <a href={j.mapPdf?.startsWith('/uploads/')?j.mapPdf:`/outputs/${j.mapPdf||"BSPD001_04H_Map.pdf"}`} download style={{flex:1,padding:"8px 0",borderRadius:4,background:T.bgInput,border:`1px solid ${T.border}`,color:T.textMuted,fontSize:11,fontWeight:700,cursor:"pointer",textAlign:"center",textDecoration:"none"}}>Download PDF</a>
  </div>
  </div>}
  </Card>
@@ -2522,8 +2537,10 @@ function JobDetail({job:jobProp,inline}={})  {
  </div>;
  })()}
 
- <div style={{padding:24,border:`2px dashed ${j.redlineStatus==="Rejected"?T.danger:T.border}`,borderRadius:4,textAlign:"center",marginBottom:12}}>
- <div style={{fontSize:32,marginBottom:8}}></div><div style={{fontSize:13,color:T.textMuted}}>{j.redlineStatus==="Rejected"?"Upload your corrected redline":"Click or drag to upload redline PDF"}</div><div style={{fontSize:11,color:T.textDim,marginTop:4}}>PDF, PNG, or JPEG accepted</div>
+ <div onClick={()=>{if(!rlFile)document.getElementById('rl-file-input')?.click();}} style={{padding:24,border:`2px dashed ${rlFile?T.success:j.redlineStatus==="Rejected"?T.danger:T.border}`,borderRadius:4,textAlign:"center",marginBottom:12,cursor:"pointer",background:rlFile?T.successSoft:"transparent"}}>
+ <input type="file" id="rl-file-input" accept=".pdf,.png,.jpg,.jpeg" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)setRlFile(f);e.target.value="";}}/>
+ {rlFile?<div><div style={{fontSize:13,fontWeight:600,color:T.success}}>{rlFile.name}</div><div style={{fontSize:11,color:T.textDim,marginTop:4}}>{(rlFile.size/1024).toFixed(0)} KB · <span onClick={e=>{e.stopPropagation();setRlFile(null);}} style={{color:T.danger,cursor:"pointer"}}>Remove</span></div></div>
+ :<><div style={{fontSize:32,marginBottom:8}}></div><div style={{fontSize:13,color:T.textMuted}}>{j.redlineStatus==="Rejected"?"Upload your corrected redline":"Click or drag to upload redline PDF"}</div><div style={{fontSize:11,color:T.textDim,marginTop:4}}>PDF, PNG, or JPEG accepted</div></>}
  </div>
  <Inp label="Notes" value={rn} onChange={setRn} ph={j.redlineStatus==="Rejected"?"Describe what you fixed...":"Correction notes..."}/>
  <div style={{display:"flex",gap:10}}><Btn onClick={upRL}>{j.redlineStatus==="Rejected"?"Upload Fix":"Upload Redline"}</Btn></div>
@@ -3423,20 +3440,31 @@ function UsersView(){
  const[users,setUsers]=useState(USERS);
 
  const openEdit=(u)=>{setEditUser(u.id);setEditVals({name:u.name,email:u.email,role:u.role,trucks:u.trucks||[],drills:u.drills||[]});};
+ const ROLE_REVERSE={admin:'SUPER_ADMIN',supervisor:'PROJECT_MANAGER',lineman:'FIELD_TECHNICIAN',foreman:'FIELD_TECHNICIAN',billing:'FINANCE',redline_specialist:'FIELD_SUPERVISOR',client_manager:'CLIENT_PORTAL',truck_investor:'FIELD_TECHNICIAN',drill_investor:'FIELD_TECHNICIAN'};
  const saveEdit=()=>{
   const idx=users.findIndex(u=>u.id===editUser);if(idx<0)return;
   const updated=[...users];updated[idx]={...updated[idx],...editVals};
   setUsers(updated);USERS.splice(0,USERS.length,...updated);setEditUser(null);
+  // Persist to backend
+  const parts=(editVals.name||'').split(' ');const firstName=parts[0]||'';const lastName=parts.slice(1).join(' ')||'';
+  const dto={firstName,lastName};if(editVals.role)dto.role=ROLE_REVERSE[editVals.role]||'FIELD_TECHNICIAN';
+  api.patch(`/users/${users[idx].id}`,dto).catch(e=>console.error('Failed to update user:',e));
  };
- const addUser=()=>{
+ const addUser=async()=>{
   if(!newUser.name.trim()||!newUser.email.trim())return;
   const u={id:"u"+Date.now(),name:newUser.name,email:newUser.email,role:newUser.role};
   if(u.role==="truck_investor")u.trucks=[];
   if(u.role==="drill_investor")u.drills=[];
   const updated=[...users,u];setUsers(updated);USERS.splice(0,USERS.length,...updated);
   setShowAdd(false);setNewUser({name:"",email:"",role:"lineman"});
+  // Persist to backend
+  const parts=newUser.name.split(' ');const firstName=parts[0]||'';const lastName=parts.slice(1).join(' ')||'User';
+  try{const created=await api.post('/users',{email:newUser.email,firstName,lastName,password:'Temp1234!',role:ROLE_REVERSE[newUser.role]||'FIELD_TECHNICIAN'});
+  // Update local user with backend ID
+  const idx2=updated.findIndex(x=>x.id===u.id);if(idx2>=0){updated[idx2]={...updated[idx2],id:created.id};setUsers([...updated]);USERS.splice(0,USERS.length,...updated);}
+  }catch(e){console.error('Failed to create user:',e);}
  };
- const deleteUser=(id)=>{const updated=users.filter(u=>u.id!==id);setUsers(updated);USERS.splice(0,USERS.length,...updated);setEditUser(null);};
+ const deleteUser=(id)=>{const updated=users.filter(u=>u.id!==id);setUsers(updated);USERS.splice(0,USERS.length,...updated);setEditUser(null);api.del(`/users/${id}`).catch(e=>console.error('Failed to delete user:',e));};
 
  const InputRow=({label,value,onChange,type,options})=><div style={{marginBottom:10}}>
   <label style={{fontSize:10,fontWeight:600,color:T.textMuted,textTransform:"uppercase",letterSpacing:0.3,display:"block",marginBottom:3}}>{label}</label>
@@ -4398,7 +4426,7 @@ function CrewVisibilityView(){
 
 // ─── REDLINE REVIEW (Client Manager) ─────────────────────────────────────────
 function RedlineReviewView(){
- const{jobs,setJobs,currentUser,setSelectedJob,setView,rateCards,trucks,clientSubFilter,setClientDetailOpen}=useApp();
+ const{jobs,setJobs,currentUser,setSelectedJob,setView,rateCards,trucks,clientSubFilter,setClientDetailOpen,apiUpdateJob}=useApp();
  const scope=currentUser.scope||{};
  const now=new Date();
  const[tab,setTab]=useState("pending");
@@ -4422,13 +4450,17 @@ function RedlineReviewView(){
  const currentList=lists[tab]||pending;
 
  const approveJob=(jobId)=>{
- setJobs(prev=>prev.map(j=>j.id===jobId?{...j,status:"Ready to Invoice",redlineStatus:"Approved",activityLog:[...(j.activityLog||[]),{action:"client_approved",actor:currentUser.id,actorName:currentUser.name,ts:now.toISOString(),detail:reviewNote||"Approved by client manager.",from:"Under Client Review",to:"Ready to Invoice"}]}:j));
+ const patch={status:"Ready to Invoice",redlineStatus:"Approved"};
+ setJobs(prev=>prev.map(j=>j.id===jobId?{...j,...patch,activityLog:[...(j.activityLog||[]),{action:"client_approved",actor:currentUser.id,actorName:currentUser.name,ts:now.toISOString(),detail:reviewNote||"Approved by client manager.",from:"Under Client Review",to:"Ready to Invoice"}]}:j));
+ apiUpdateJob(jobId,patch).catch(e=>console.error('Failed to persist approve:',e));
  setReviewNote("");setSelJob(null);
  };
 
  const rejectJob=(jobId)=>{
  if(!reviewNote.trim())return;
- setJobs(prev=>prev.map(j=>j.id===jobId?{...j,status:"Rejected",redlineStatus:"Rejected",activityLog:[...(j.activityLog||[]),{action:"client_rejected",actor:currentUser.id,actorName:currentUser.name,ts:now.toISOString(),detail:reviewNote,from:"Under Client Review",to:"Rejected"}]}:j));
+ const patch={status:"Rejected",redlineStatus:"Rejected"};
+ setJobs(prev=>prev.map(j=>j.id===jobId?{...j,...patch,activityLog:[...(j.activityLog||[]),{action:"client_rejected",actor:currentUser.id,actorName:currentUser.name,ts:now.toISOString(),detail:reviewNote,from:"Under Client Review",to:"Rejected"}]}:j));
+ apiUpdateJob(jobId,patch).catch(e=>console.error('Failed to persist reject:',e));
  setReviewNote("");setSelJob(null);
  };
 
@@ -4942,7 +4974,7 @@ function MaterialsView(){
 
 // ─── CREW SCHEDULING & DISPATCH ──────────────────────────────────────────────
 function ScheduleView(){
- const{jobs,setJobs,trucks,drills,rateCards}=useApp();
+ const{jobs,setJobs,trucks,drills,rateCards,apiUpdateJob}=useApp();
  const[weekOffset,setWeekOffset]=useState(0);
  const[dragJob,setDragJob]=useState(null);
  const[filterRegion,setFilterRegion]=useState("all");
@@ -4988,28 +5020,31 @@ function ScheduleView(){
  const assignJob=(jobId,crewId,dayDate)=>{
  const crew=allCrew.find(c=>c.id===crewId);
  const isUG=crew?.role==="foreman";
- // Find the truck this crew usually uses (from their existing assignments)
  const usualTruck=crewStats[crewId]?.truck||null;
  const truckId=!isUG?(usualTruck||trucks[0]?.id):null;
  const drillId=isUG?(drills[0]?.id||null):null;
- setJobs(prev=>prev.map(j=>{
- if(j.id!==jobId)return j;
- if(j.status!=="Unassigned"||j.production)return j;// guard: only assign unassigned jobs without production
- return{...j,status:"Assigned",assignedLineman:crewId,
+ const patch={status:"Assigned",assignedLineman:crewId,
  assignedTruck:truckId,truckInvestor:trucks.find(t=>t.id===truckId)?.owner||null,
  assignedDrill:drillId,drillInvestor:drills.find(d=>d.id===drillId)?.owner||null,
  scheduledDate:dayDate};
+ setJobs(prev=>prev.map(j=>{
+ if(j.id!==jobId)return j;
+ if(j.status!=="Unassigned"||j.production)return j;
+ return{...j,...patch};
  }));
+ apiUpdateJob(jobId,patch).catch(e=>console.error('Failed to persist assign:',e));
  setDragJob(null);
  };
 
  // Unassign job — only if it has no production data
  const unassignJob=(jobId)=>{
+ const patch={status:"Unassigned",assignedLineman:null,assignedTruck:null,truckInvestor:null,assignedDrill:null,drillInvestor:null};
  setJobs(prev=>prev.map(j=>{
  if(j.id!==jobId)return j;
- if(j.production)return j;// guard: never unassign a job that has production
- return{...j,status:"Unassigned",assignedLineman:null,assignedTruck:null,truckInvestor:null,assignedDrill:null,drillInvestor:null};
+ if(j.production)return j;
+ return{...j,...patch};
  }));
+ apiUpdateJob(jobId,patch).catch(e=>console.error('Failed to persist unassign:',e));
  };
 
  const regions=[...new Set(jobs.map(j=>j.region))];
@@ -6443,7 +6478,7 @@ function ReportsView(){
 
 // ─── INVOICING & ACCOUNTS RECEIVABLE ────────────────────────────────────────
 function InvoicingView(){
- const{jobs,setJobs,rateCards,invoices,setInvoices,companyConfig}=useApp();
+ const{jobs,setJobs,rateCards,invoices,setInvoices,companyConfig,apiUpdateJob}=useApp();
  const[tab,setTab]=useState("ready");
  const[selInv,setSelInv]=useState(null);
  const[showCreate,setShowCreate]=useState(false);
@@ -6469,7 +6504,7 @@ function InvoicingView(){
   });return g;
  },[readyJobs]);
 
- const createInvoice=()=>{
+ const createInvoice=async()=>{
   const jobIds=Object.keys(selJobs).filter(k=>selJobs[k]);
   if(jobIds.length===0)return;
   const invJobs=jobs.filter(j=>jobIds.includes(j.id));
@@ -6485,27 +6520,40 @@ function InvoicingView(){
     });
    }
   });
+  const invNumber=`INV-${String(invoices.length+1001).padStart(4,"0")}`;
   const inv={
-   id:`INV-${String(invoices.length+1001).padStart(4,"0")}`,
+   id:invNumber,
    createdAt:new Date().toISOString(),
    client,customer,region:invJobs[0]?.region,
    jobIds,jobCount:jobIds.length,
    lineItems,totalAmount:+totalAmount.toFixed(2),
    terms:invTerms,billTo:invBillTo||`${customer} c/o ${client}`,
    notes:invNotes,
-   status:"draft", // draft → sent → paid → void
+   status:"draft",
    sentAt:null,paidAt:null,paidAmount:null,paymentRef:null,
    from:companyConfig?.companyName||"NextGen Fiber",
   };
   setInvoices(prev=>[...prev,inv]);
   // Mark jobs as Billed
   setJobs(prev=>prev.map(j=>jobIds.includes(j.id)?{...j,status:"Billed",billedAt:new Date().toISOString()}:j));
+  jobIds.forEach(jid=>apiUpdateJob(jid,{status:"Billed",billedAt:new Date().toISOString()}).catch(e=>console.error('Failed to mark job billed:',e)));
   setShowCreate(false);setSelJobs({});setInvNotes("");setInvBillTo("");
   setSelInv(inv.id);setTab("all");
+  // Persist invoice to backend
+  const projectId=invJobs[0]?.projectId;
+  const dueDate=new Date(Date.now()+30*86400000).toISOString();
+  const backendItems=lineItems.map(li=>({description:`${li.feederId} - ${li.code}: ${li.description}`,quantity:li.qty,unit:li.unit||'each',unitPrice:li.rate}));
+  if(projectId){try{await api.post('/invoices',{invoiceNumber:invNumber,issueDate:new Date().toISOString(),dueDate,notes:invNotes||'',projectId,lineItems:backendItems});}catch(e){console.error('Failed to create invoice on backend:',e);}}
  };
 
  const updateInvStatus=(invId,status,extra={})=>{
   setInvoices(prev=>prev.map(inv=>inv.id===invId?{...inv,status,...extra}:inv));
+  // Persist status change (map frontend status to backend InvoiceStatus)
+  const STATUS_INV_MAP={draft:'DRAFT',sent:'SENT',paid:'PAID',void:'CANCELLED'};
+  const dto={status:STATUS_INV_MAP[status]||status};
+  if(extra.paidAmount)dto.paidAmount=extra.paidAmount;
+  if(extra.notes)dto.notes=extra.notes;
+  api.patch(`/invoices/${invId}`,dto).catch(e=>console.error('Failed to update invoice status:',e));
  };
 
  const allInvoices=invoices.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
