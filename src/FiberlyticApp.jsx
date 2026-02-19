@@ -607,16 +607,16 @@ function SB({status,cfg=STATUS_CFG}){const s=cfg[status]||{c:T.textMuted,bg:"rgb
 function FB({status}){const s=FIN_CFG[status]||{c:T.textMuted,bg:"rgba(100,116,139,0.1)"};return <Badge label={status} color={s.c} bg={s.bg}/>;}
 
 function Card({children,style,onClick,hover}){
- return <div onClick={onClick} className={hover?"card-hover":undefined} style={{background:T.bgCard,border:`1px solid ${T.border}`,borderRadius:4,padding:20,cursor:onClick?"pointer":"default",transition:"background 0.15s, border-color 0.15s",...style}}>{children}</div>;
+ return <div onClick={onClick} className={hover?"card-hover":undefined} style={{background:T.bgCard,borderWidth:1,borderStyle:"solid",borderColor:T.border,borderRadius:4,padding:20,cursor:onClick?"pointer":"default",transition:"background 0.15s, border-color 0.15s",...style}}>{children}</div>;
 }
 function Btn({children,onClick,v="primary",sz="md",style,disabled}){
  const[h,setH]=useState(false);
  const vs={primary:{bg:"#111111",bgH:"#333333",c:"#fff"},success:{bg:T.success,bgH:"#059669",c:"#fff"},danger:{bg:T.danger,bgH:"#B91C1C",c:"#fff"},ghost:{bg:"transparent",bgH:T.bgInput,c:T.text},outline:{bg:"transparent",bgH:T.accentSoft,c:T.text,bdr:`1px solid ${T.border}`}};
  const vv=vs[v];const szs={sm:{p:"5px 12px",f:12},md:{p:"8px 18px",f:13},lg:{p:"10px 24px",f:14}};const ss=szs[sz];
- return <button disabled={disabled} onClick={onClick} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)} style={{background:disabled?T.bgInput:h?vv.bgH:vv.bg,color:disabled?T.textDim:vv.c,border:vv.bdr||"none",borderRadius:4,fontWeight:600,cursor:disabled?"not-allowed":"pointer",transition:"all 0.2s",letterSpacing:0.2,padding:ss.p,fontSize:ss.f,...style}}>{children}</button>;
+ return <button disabled={disabled} onClick={onClick} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)} style={{background:disabled?T.bgInput:h?vv.bgH:vv.bg,color:disabled?T.textDim:vv.c,borderWidth:vv.bdr?1:0,borderStyle:vv.bdr?"solid":"none",borderColor:vv.bdr?T.border:"transparent",borderRadius:4,fontWeight:600,cursor:disabled?"not-allowed":"pointer",transition:"all 0.2s",letterSpacing:0.2,padding:ss.p,fontSize:ss.f,...style}}>{children}</button>;
 }
 function Inp({label,value,onChange,type="text",ph,disabled,style,options,textarea}){
- const bs={width:"100%",boxSizing:"border-box",background:T.bgInput,color:T.text,border:`1px solid ${T.border}`,borderRadius:4,padding:"8px 12px",fontSize:13,outline:"none"};
+ const bs={width:"100%",boxSizing:"border-box",background:T.bgInput,color:T.text,borderWidth:1,borderStyle:"solid",borderColor:T.border,borderRadius:4,padding:"8px 12px",fontSize:13,outline:"none"};
  return <div style={{marginBottom:12,...style}}>
  {label&&<label style={{display:"block",fontSize:11,fontWeight:600,color:T.textMuted,marginBottom:5,letterSpacing:0.4,textTransform:"uppercase"}}>{label}</label>}
  {options?<select value={value} onChange={e=>onChange(e.target.value)} disabled={disabled} style={{...bs,cursor:disabled?"not-allowed":"pointer"}}><option value="">Select...</option>{options.map(o=><option key={typeof o==="object"?o.value:o} value={typeof o==="object"?o.value:o}>{typeof o==="object"?o.label:o}</option>)}</select>
@@ -1235,7 +1235,7 @@ function RateCardsView(){
  <Modal open={impM} onClose={()=>setImpM(false)} title="Import Rate Card from Excel" width={500}>
  {(()=>{const[impTarget,setImpTarget]=useState("");const[impProfile,setImpProfile]=useState("");
  return <div>
- <div onClick={()=>{/* File input simulation */const nc={...rateCards};const gk=impTarget||Object.keys(nc)[0];if(!gk||!nc[gk])return;const g={...nc[gk]};g.changeLog=[...(g.changeLog||[]),`Imported rates from Excel for profile "${impProfile||"NextGen Default"}"`];g.version=(g.version||1)+1;g.uploadedAt=new Date().toISOString();nc[gk]=g;setRateCards(nc);setImpM(false);}} style={{padding:32,border:`2px dashed ${T.border}`,borderRadius:4,textAlign:"center",marginBottom:16,cursor:"pointer",transition:"border-color 0.15s"}} onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent} onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
+ <div onClick={()=>{/* File input simulation */const nc={...rateCards};const gk=impTarget||Object.keys(nc)[0];if(!gk||!nc[gk])return;const g={...nc[gk]};g.changeLog=[...(g.changeLog||[]),`Imported rates from Excel for profile "${impProfile||"NextGen Default"}"`];g.version=(g.version||1)+1;g.uploadedAt=new Date().toISOString();nc[gk]=g;setRateCards(nc);setImpM(false);}} style={{padding:32,borderWidth:2,borderStyle:"dashed",borderColor:T.border,borderRadius:4,textAlign:"center",marginBottom:16,cursor:"pointer",transition:"border-color 0.15s"}} onMouseEnter={e=>e.currentTarget.style.borderColor=T.accent} onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
  <div style={{fontSize:36,marginBottom:8}}>📄</div>
  <div style={{fontSize:14,fontWeight:600,color:T.text}}>Drop Excel file or click to browse</div>
  <div style={{fontSize:12,color:T.textMuted,marginTop:6}}>Columns: Code, Description, Unit, Rate</div>
@@ -2737,7 +2737,7 @@ function JobDetail({job:jobProp,inline}={})  {
    </div>
   </div>
   {/* Simulated file drop zone */}
-  <div style={{marginTop:10,padding:"20px 16px",border:`2px dashed ${T.border}`,borderRadius:8,textAlign:"center",cursor:"pointer",transition:"all 0.15s"}}
+  <div style={{marginTop:10,padding:"20px 16px",borderWidth:2,borderStyle:"dashed",borderColor:T.border,borderRadius:8,textAlign:"center",cursor:"pointer",transition:"all 0.15s"}}
    onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.background=T.accentSoft;}}
    onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="transparent";}}>
    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={T.textDim} strokeWidth="1.5" style={{margin:"0 auto 6px"}}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -2809,12 +2809,12 @@ function JobDetail({job:jobProp,inline}={})  {
      </div>
      {/* Actions */}
      <div style={{display:"flex",gap:4,flexShrink:0}}>
-      <button title="View" style={{width:28,height:28,borderRadius:4,background:T.bgInput,border:`1px solid ${T.border}`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:T.textMuted,fontSize:12,transition:"all 0.12s"}}
+      <button title="View" style={{width:28,height:28,borderRadius:4,background:T.bgInput,borderWidth:1,borderStyle:"solid",borderColor:T.border,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:T.textMuted,fontSize:12,transition:"all 0.12s"}}
        onMouseEnter={e=>{e.currentTarget.style.background=T.accent;e.currentTarget.style.color="#fff";e.currentTarget.style.borderColor=T.accent;}}
        onMouseLeave={e=>{e.currentTarget.style.background=T.bgInput;e.currentTarget.style.color=T.textMuted;e.currentTarget.style.borderColor=T.border;}}>
        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
       </button>
-      {isAdm&&<button title="Remove" onClick={(e)=>{e.stopPropagation();upd({documents:(j.documents||[]).filter(d=>d.id!==doc.id)},{action:"document_removed",detail:`Document removed: ${dt.label} — ${doc.name}`});}} style={{width:28,height:28,borderRadius:4,background:T.bgInput,border:`1px solid ${T.border}`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:T.textMuted,fontSize:12,transition:"all 0.12s"}}
+      {isAdm&&<button title="Remove" onClick={(e)=>{e.stopPropagation();upd({documents:(j.documents||[]).filter(d=>d.id!==doc.id)},{action:"document_removed",detail:`Document removed: ${dt.label} — ${doc.name}`});}} style={{width:28,height:28,borderRadius:4,background:T.bgInput,borderWidth:1,borderStyle:"solid",borderColor:T.border,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:T.textMuted,fontSize:12,transition:"all 0.12s"}}
        onMouseEnter={e=>{e.currentTarget.style.background=T.dangerSoft;e.currentTarget.style.color=T.danger;e.currentTarget.style.borderColor=T.danger+"44";}}
        onMouseLeave={e=>{e.currentTarget.style.background=T.bgInput;e.currentTarget.style.color=T.textMuted;e.currentTarget.style.borderColor=T.border;}}>
        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -5431,7 +5431,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
  {/* Upload Zone */}
  {mcStatus==="idle"&&<div onDrop={e=>{e.preventDefault();const f=e.dataTransfer?.files?.[0];if(f)handleFile(f);}} onDragOver={e=>e.preventDefault()} onClick={()=>fileRef.current?.click()}
- style={{border:`2px dashed ${T.border}`,borderRadius:14,padding:"56px 32px",textAlign:"center",cursor:"pointer",background:T.bgInput,transition:"all 0.2s"}}
+ style={{borderWidth:2,borderStyle:"dashed",borderColor:T.border,borderRadius:14,padding:"56px 32px",textAlign:"center",cursor:"pointer",background:T.bgInput,transition:"all 0.2s"}}
  onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;e.currentTarget.style.background=T.accent+"08";}} onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background=T.bgInput;}}>
  <div style={{width:56,height:56,borderRadius:14,background:`linear-gradient(135deg,${T.accent},${T.accent}cc)`,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px"}}>
  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
@@ -5732,7 +5732,7 @@ function SplicingViewInner(){
         </select></div>
         <div><div style={{fontSize:10,fontWeight:600,color:T.textMuted,marginBottom:3}}>Note</div><input value={newPhotoNote} onChange={e=>setNewPhotoNote(e.target.value)} placeholder="Optional note" style={{width:"100%",padding:"7px 8px",borderRadius:4,border:`1px solid ${T.border}`,background:T.bgInput,color:T.text,fontSize:11,boxSizing:"border-box"}}/></div>
        </div>
-       <div style={{marginTop:8,padding:"16px 12px",border:`2px dashed ${T.border}`,borderRadius:6,textAlign:"center",cursor:"pointer"}}
+       <div style={{marginTop:8,padding:"16px 12px",borderWidth:2,borderStyle:"dashed",borderColor:T.border,borderRadius:6,textAlign:"center",cursor:"pointer"}}
         onMouseEnter={e=>{e.currentTarget.style.borderColor=T.accent;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;}}>
         <div style={{fontSize:11,color:T.textMuted}}>Drop photo or click to browse</div>
        </div>
