@@ -507,6 +507,23 @@ function gpsVerifyStatus(gpsDistance,reportedFt){
  return{status:"mismatch",label:"GPS Mismatch",color:T.danger};
 }
 
+// ─── Error Boundary ─────────────────────────────────────────────────────────
+class ViewErrorBoundary extends React.Component{
+ constructor(props){super(props);this.state={hasError:false,error:null};}
+ static getDerivedStateFromError(error){return{hasError:true,error};}
+ render(){
+  if(this.state.hasError){
+   return React.createElement("div",{style:{padding:40,textAlign:"center"}},
+    React.createElement("div",{style:{fontSize:32,marginBottom:12}},"⚠️"),
+    React.createElement("div",{style:{fontSize:16,fontWeight:600,color:"#F0F0F0",marginBottom:8}},"Algo deu errado"),
+    React.createElement("div",{style:{fontSize:13,color:"#888",marginBottom:16}},this.state.error?.message||"Erro inesperado"),
+    React.createElement("button",{onClick:()=>{this.setState({hasError:false,error:null});if(this.props.onReset)this.props.onReset();},style:{padding:"10px 24px",borderRadius:6,border:"none",background:"#F0F0F0",color:"#111",fontSize:13,fontWeight:700,cursor:"pointer"}},"Voltar")
+   );
+  }
+  return this.props.children;
+ }
+}
+
 // ─── Live Mode Map Component ────────────────────────────────────────────────
 function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, currentUser }) {
  const mapRef = useRef(null);
@@ -519,7 +536,7 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
  const [gpsError, setGpsError] = useState(null);
  const [mapReady, setMapReady] = useState(false);
 
- const poles = job.routePoles || [];
+ const poles = (job.routePoles || []).filter(p => p && p.lat && p.lng);
  const spans = liveSession?.spans || [];
  const GPS_RADIUS_M = 50; // Proximity radius for pole selection
 
@@ -1938,7 +1955,7 @@ function JobsMgmt(){
  )}
  </div>}
 
- <DT columns={cols} data={sorted} onRowClick={row=>setExpandedJobId(expandedJobId===row.id?null:row.id)} expandedId={expandedJobId} renderExpanded={row=><JobDetail job={row} inline/>}/>
+ <DT columns={cols} data={sorted} onRowClick={row=>setExpandedJobId(expandedJobId===row.id?null:row.id)} expandedId={expandedJobId} renderExpanded={row=><ViewErrorBoundary onReset={()=>setExpandedJobId(null)}><JobDetail job={row} inline/></ViewErrorBoundary>}/>
 
  <Modal open={showC} onClose={()=>setShowC(false)} title="Create New Job" width={640}>
  {/* Department toggle */}
@@ -2040,7 +2057,7 @@ function JobDetail({job:jobProp,inline}={})  {
  },[prodRows]);
 
  const isUG=j.department==="underground";
- const upd=(u,auditEntry)=>{const log=[...(j.auditLog||[])];if(auditEntry)log.push({...auditEntry,ts:new Date().toISOString(),actor:currentUser.id,actorName:currentUser.name});const up={...j,...u,auditLog:log,updatedAt:new Date().toISOString()};setJobs(jobs.map(x=>x.id===j.id?up:x));if(!inline)setSelectedJob(up);};
+ const upd=(u,auditEntry)=>{const log=[...(j.auditLog||[])];if(auditEntry)log.push({...auditEntry,ts:new Date().toISOString(),actor:currentUser.id,actorName:currentUser.name});const up={...j,...u,auditLog:log,updatedAt:new Date().toISOString()};setJobs(prev=>prev.map(x=>x.id===j.id?up:x));if(!inline)setSelectedJob(up);};
  const subProd=()=>{
  if(isUG){
  // Underground production submission
@@ -2327,7 +2344,7 @@ function JobDetail({job:jobProp,inline}={})  {
 
  {liveProdMode&&!isUG&&<div>
  {(!j.routePoles||j.routePoles.length<2)?<Card style={{padding:40,textAlign:"center"}}><div style={{fontSize:16,fontWeight:600,color:T.text,marginBottom:4}}>Route Not Set Up Yet</div><div style={{fontSize:13,color:T.textMuted}}>Admin needs to set up the pole route first. Use Production Sheet for now.</div><Btn onClick={()=>setLiveProdMode(false)} style={{marginTop:16}}>Switch to Sheet</Btn></Card>
- :<LiveModeMap job={j} liveSession={liveSession} setLiveSession={setLiveSession} onSubmit={()=>{const spns=liveSession.spans.map((sp,i)=>({spanId:i+1,spanWorkType:sp.workTypes[0]||"S+F",strandSpan:sp.footage,anchora:sp.anchor,fiberMarking:sp.fiberSeq||"",coil:sp.coil,poleTransfer:sp.poleTransfer,snowshoe:sp.snowshoe}));const totalFeet=spns.reduce((s,sp)=>s+sp.strandSpan,0);const p={completedDate:pf.completedDate,totalFeet,totalStrand:totalFeet,totalFiber:totalFeet,totalOverlash:0,totalConduit:0,anchors:spns.filter(s=>s.anchora).length,coils:spns.filter(s=>s.coil).length,snowshoes:spns.filter(s=>s.snowshoe).length,poleTransfers:spns.filter(s=>s.poleTransfer).length,entries:spns.length,spans:spns,liveMode:true,comments:pf.comments,submittedAt:new Date().toISOString(),submittedBy:currentUser.id};upd({production:p,workType:"Strand",status:"Pending Redlines"});setTab("production");setLiveSession(null);}} pf={pf} setPf={setPf} currentUser={currentUser}/>}
+ :<LiveModeMap job={j} liveSession={liveSession} setLiveSession={setLiveSession} onSubmit={()=>{if(!liveSession||!liveSession.spans||liveSession.spans.length===0)return;const spns=liveSession.spans.map((sp,i)=>({spanId:i+1,spanWorkType:(sp.workTypes&&sp.workTypes[0])||"S+F",strandSpan:sp.footage||0,anchora:!!sp.anchor,fiberMarking:sp.fiberSeq||"",coil:!!sp.coil,poleTransfer:!!sp.poleTransfer,snowshoe:!!sp.snowshoe}));const totalFeet=spns.reduce((s,sp)=>s+sp.strandSpan,0);const p={completedDate:pf.completedDate,totalFeet,totalStrand:totalFeet,totalFiber:totalFeet,totalOverlash:0,totalConduit:0,anchors:spns.filter(s=>s.anchora).length,coils:spns.filter(s=>s.coil).length,snowshoes:spns.filter(s=>s.snowshoe).length,poleTransfers:spns.filter(s=>s.poleTransfer).length,entries:spns.length,spans:spns,liveMode:true,comments:pf.comments,submittedAt:new Date().toISOString(),submittedBy:currentUser.id};upd({production:p,workType:"Strand",status:"Pending Redlines"});setTab("production");setLiveSession(null);setLiveProdMode(false);}} pf={pf} setPf={setPf} currentUser={currentUser}/>}
  </div>}
 
  <div style={{display:(!liveProdMode||isUG)?"block":"none"}}>
@@ -8218,7 +8235,7 @@ export default function App(){
  }
 
  const render=()=>{
- if(view==="job_detail"&&selectedJob)return <JobDetail/>;
+ if(view==="job_detail"){if(!selectedJob){setView("jobs");return <JobsMgmt/>;}return <ViewErrorBoundary onReset={()=>{setSelectedJob(null);setView("jobs");}}><JobDetail/></ViewErrorBoundary>;};
  if(view==="investor_dashboard")return <InvestorDashboard/>;
  if(view==="investor_stubs")return <InvestorStubsView/>;
  if(view==="trucks")return <TrucksView/>;
