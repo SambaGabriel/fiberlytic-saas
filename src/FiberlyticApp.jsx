@@ -1,4 +1,6 @@
-import React, { useState, useCallback, useMemo, useRef, createContext, useContext } from "react";
+import React, { useState, useCallback, useMemo, useRef, createContext, useContext, useEffect } from "react";
+import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const DARK = {
@@ -423,7 +425,7 @@ function genJobs(){
  reviewNotes:st==="Rejected"?"Span 2 footage mismatch. Re-verify.":"",
  confirmedTotals:hasRL?(()=>{const spanCount=2+(i%4);const actTotal=Array.from({length:spanCount},(_,s)=>50+((i+s)*37)%300).reduce((a,b)=>a+b,0);return{totalFeet:actTotal+([-30,-10,0,0,10,20][i%6]),totalStrand:actTotal+([-30,-10,0,0,10,20][i%6]),anchors:Math.ceil(spanCount/3),coils:Math.ceil(spanCount/4),snowshoes:Math.ceil(spanCount/5),poleTransfers:Math.floor(spanCount/5),entries:spanCount,confirmedBy:"u6",confirmedAt:new Date(compDate.getTime()+5400000).toISOString()};})():null,
  billedAt:st==="Billed"?new Date(compDate.getTime()+14*86400000).toISOString():null,
- mapPdf:i===2?"BSPD001_04H_Map.pdf":`Map_${FEEDERS[i%FEEDERS.length]}.pdf`,routePoles:i===2?[{id:"p295",label:"MRE#295",distToNext:262},{id:"p296",label:"MRE#296",distToNext:279},{id:"p299",label:"MRE#299",distToNext:322},{id:"p300",label:"MRE#300",distToNext:319},{id:"p301",label:"MRE#301",distToNext:201},{id:"p302",label:"MRE#302",distToNext:292},{id:"p303",label:"MRE#303",distToNext:240},{id:"p304",label:"MRE#304",distToNext:270},{id:"p305",label:"MRE#305",distToNext:357},{id:"p306",label:"MRE#306",distToNext:204},{id:"p307",label:"MRE#307",distToNext:296},{id:"p308",label:"MRE#308",distToNext:488},{id:"p309",label:"MRE#309",distToNext:379},{id:"p310",label:"MRE#310",distToNext:453},{id:"p311",label:"MRE#311",distToNext:129},{id:"p312",label:"MRE#312",distToNext:213},{id:"p313",label:"MRE#313",distToNext:462},{id:"p314",label:"MRE#314",distToNext:212},{id:"p315",label:"MRE#315",distToNext:146},{id:"p316",label:"MRE#316",distToNext:297},{id:"p317",label:"DSPLC",distToNext:0}]:(st==="Assigned"||st==="Unassigned")?(()=>{const pc=8+(i%5);return Array.from({length:pc},(_,pi)=>({id:`p${i}-${pi}`,label:`P${pi+1}`,distToNext:pi<pc-1?80+((i+pi)*37)%220:0}));})():null,
+ mapPdf:i===2?"BSPD001_04H_Map.pdf":`Map_${FEEDERS[i%FEEDERS.length]}.pdf`,routePoles:i===2?[{id:"p295",label:"MRE#295",distToNext:262,lat:34.37280,lng:-86.90850},{id:"p296",label:"MRE#296",distToNext:279,lat:34.37030,lng:-86.90830},{id:"p299",label:"MRE#299",distToNext:322,lat:34.36760,lng:-86.90810},{id:"p300",label:"MRE#300",distToNext:319,lat:34.36460,lng:-86.90790},{id:"p301",label:"MRE#301",distToNext:201,lat:34.36270,lng:-86.90770},{id:"p302",label:"MRE#302",distToNext:292,lat:34.36080,lng:-86.90750},{id:"p303",label:"MRE#303",distToNext:240,lat:34.35800,lng:-86.90730},{id:"p304",label:"MRE#304",distToNext:270,lat:34.35580,lng:-86.90710},{id:"p305",label:"MRE#305",distToNext:357,lat:34.35300,lng:-86.90690},{id:"p306",label:"MRE#306",distToNext:204,lat:34.35110,lng:-86.90660},{id:"p307",label:"MRE#307",distToNext:296,lat:34.34920,lng:-86.90640},{id:"p308",label:"MRE#308",distToNext:488,lat:34.34640,lng:-86.90620},{id:"p309",label:"MRE#309",distToNext:379,lat:34.34270,lng:-86.90590},{id:"p310",label:"MRE#310",distToNext:453,lat:34.33910,lng:-86.90560},{id:"p311",label:"MRE#311",distToNext:129,lat:34.33790,lng:-86.90540},{id:"p312",label:"MRE#312",distToNext:213,lat:34.33590,lng:-86.90520},{id:"p313",label:"MRE#313",distToNext:462,lat:34.33160,lng:-86.90490},{id:"p314",label:"MRE#314",distToNext:212,lat:34.32960,lng:-86.90470},{id:"p315",label:"MRE#315",distToNext:146,lat:34.32820,lng:-86.90450},{id:"p316",label:"MRE#316",distToNext:297,lat:34.32540,lng:-86.90430},{id:"p317",label:"DSPLC",distToNext:0,lat:34.32260,lng:-86.90410}]:(st==="Assigned"||st==="Unassigned")?(()=>{const pc=8+(i%5);const regionCoords={Alabama:{lat:34.37,lng:-86.91},"North Carolina":{lat:35.75,lng:-81.68},Virginia:{lat:37.27,lng:-79.94},Tennessee:{lat:35.97,lng:-83.92}};const base=regionCoords[rg]||regionCoords.Alabama;return Array.from({length:pc},(_,pi)=>({id:`p${i}-${pi}`,label:`P${pi+1}`,distToNext:pi<pc-1?80+((i+pi)*37)%220:0,lat:base.lat-(pi*0.0019)+((i*0.0003)%0.002),lng:base.lng+(pi*0.0002)+((i*0.0001)%0.001)}));})():null,
  messages:hasProd?[
  {id:"m"+i+"a",userId:lm?.id||"u3",text:["Production submitted, all good.","Had to reroute span 3.","Completed ahead of schedule!","Weather delay but got it done.","Smooth run, no issues."][i%5],ts:new Date(compDate.getTime()+3600000).toISOString()},
  {id:"m"+i+"b",userId:"u1",text:["Looks great, sending to redline.","Nice work, keep it up!","Got it, thanks.","Solid numbers this week.","Approved, moving forward."][i%5],ts:new Date(compDate.getTime()+7200000).toISOString()},
@@ -505,6 +507,291 @@ function gpsVerifyStatus(gpsDistance,reportedFt){
  return{status:"mismatch",label:"GPS Mismatch",color:T.danger};
 }
 
+// ─── Live Mode Map Component ────────────────────────────────────────────────
+function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, currentUser }) {
+ const mapRef = useRef(null);
+ const mapInstance = useRef(null);
+ const markersRef = useRef([]);
+ const userMarkerRef = useRef(null);
+ const gpsWatchRef = useRef(null);
+ const [userPos, setUserPos] = useState(null);
+ const [gpsAccuracy, setGpsAccuracy] = useState(null);
+ const [gpsError, setGpsError] = useState(null);
+ const [mapReady, setMapReady] = useState(false);
+
+ const poles = job.routePoles || [];
+ const spans = liveSession?.spans || [];
+ const GPS_RADIUS_M = 50; // Proximity radius for pole selection
+
+ // Initialize map
+ useEffect(() => {
+  if (!mapRef.current || poles.length === 0) return;
+  if (mapInstance.current) return;
+
+  // Calculate bounds from poles
+  const lngs = poles.map(p => p.lng).filter(Boolean);
+  const lats = poles.map(p => p.lat).filter(Boolean);
+  if (lngs.length === 0) return;
+
+  const map = new maplibregl.Map({
+   container: mapRef.current,
+   style: { version: 8, sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, attribution: "&copy; OpenStreetMap" } }, layers: [{ id: "osm", type: "raster", source: "osm" }] },
+   center: [lngs.reduce((a, b) => a + b, 0) / lngs.length, lats.reduce((a, b) => a + b, 0) / lats.length],
+   zoom: 14,
+   attributionControl: false,
+  });
+
+  map.addControl(new maplibregl.NavigationControl(), "top-right");
+
+  map.on("load", () => {
+   // Add route line source
+   const routeCoords = poles.filter(p => p.lat && p.lng).map(p => [p.lng, p.lat]);
+   map.addSource("route", { type: "geojson", data: { type: "Feature", geometry: { type: "LineString", coordinates: routeCoords }, properties: {} } });
+   map.addLayer({ id: "route-bg", type: "line", source: "route", paint: { "line-color": "#555555", "line-width": 3, "line-dasharray": [2, 2] } });
+
+   // Completed spans layer
+   map.addSource("completed-spans", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+   map.addLayer({ id: "completed-spans-layer", type: "line", source: "completed-spans", paint: { "line-width": 5 } });
+
+   // GPS accuracy circle
+   map.addSource("gps-accuracy", { type: "geojson", data: { type: "Feature", geometry: { type: "Point", coordinates: [0, 0] }, properties: {} } });
+   map.addLayer({ id: "gps-accuracy-circle", type: "circle", source: "gps-accuracy", paint: { "circle-radius": 20, "circle-color": "rgba(59, 130, 246, 0.1)", "circle-stroke-color": "rgba(59, 130, 246, 0.3)", "circle-stroke-width": 1 } });
+
+   setMapReady(true);
+
+   // Fit to bounds
+   const bounds = new maplibregl.LngLatBounds();
+   routeCoords.forEach(c => bounds.extend(c));
+   map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+  });
+
+  mapInstance.current = map;
+  return () => { map.remove(); mapInstance.current = null; };
+ }, [poles.length]);
+
+ // Update pole markers when session changes
+ useEffect(() => {
+  if (!mapInstance.current || !mapReady) return;
+  // Clear old markers
+  markersRef.current.forEach(m => m.remove());
+  markersRef.current = [];
+
+  poles.forEach((pole, pi) => {
+   if (!pole.lat || !pole.lng) return;
+   const completedSpan = spans.find(s => s.toPole === pole.id);
+   const isStart = liveSession?.startPole === pole.id;
+   const isCurrent = liveSession?.currentPole === pole.id;
+   const isCompleted = !!completedSpan || isStart;
+   const nextIdx = liveSession?.currentPole ? poles.findIndex(p => p.id === liveSession.currentPole) + 1 : -1;
+   const isNext = liveSession && nextIdx === pi && !isCompleted;
+
+   // Determine color
+   let color = "#6B7280"; // gray - pending
+   let size = 14;
+   if (isCurrent) { color = "#4ADE80"; size = 20; } // green - current
+   else if (isCompleted) { color = "#22C55E"; size = 16; } // green - done
+   else if (isNext) { color = "#FACC15"; size = 18; } // yellow - next
+
+   const el = document.createElement("div");
+   el.style.cssText = `width:${size}px;height:${size}px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4);cursor:pointer;transition:all 0.3s;`;
+   if (isCurrent) el.style.cssText += `box-shadow:0 0 0 8px rgba(74,222,128,0.25),0 2px 8px rgba(0,0,0,0.4);`;
+   if (isNext) el.style.cssText += `box-shadow:0 0 0 6px rgba(250,204,21,0.2),0 2px 8px rgba(0,0,0,0.4);`;
+
+   // Label
+   const label = document.createElement("div");
+   label.style.cssText = `position:absolute;top:${size+4}px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:10px;font-weight:700;color:#fff;background:rgba(0,0,0,0.7);padding:1px 5px;border-radius:3px;pointer-events:none;`;
+   label.textContent = pole.label || `P${pi + 1}`;
+   el.appendChild(label);
+
+   const marker = new maplibregl.Marker({ element: el }).setLngLat([pole.lng, pole.lat]).addTo(mapInstance.current);
+   markersRef.current.push(marker);
+  });
+ }, [mapReady, liveSession?.startPole, liveSession?.currentPole, spans.length]);
+
+ // Update completed spans on map
+ useEffect(() => {
+  if (!mapInstance.current || !mapReady) return;
+  const features = spans.map(sp => {
+   const from = poles.find(p => p.id === sp.fromPole);
+   const to = poles.find(p => p.id === sp.toPole);
+   if (!from?.lat || !to?.lat) return null;
+   const wt = sp.workTypes?.[0] || "S+F";
+   const color = wt === "Overlash" ? "#22C55E" : wt === "Fiber" ? "#C084FC" : wt === "Strand" ? "#F0F0F0" : "#3B82F6";
+   return { type: "Feature", geometry: { type: "LineString", coordinates: [[from.lng, from.lat], [to.lng, to.lat]] }, properties: { color } };
+  }).filter(Boolean);
+
+  const src = mapInstance.current.getSource("completed-spans");
+  if (src) src.setData({ type: "FeatureCollection", features });
+
+  // Update paint to use data-driven color
+  if (mapInstance.current.getLayer("completed-spans-layer")) {
+   mapInstance.current.setPaintProperty("completed-spans-layer", "line-color", ["get", "color"]);
+  }
+ }, [mapReady, spans.length]);
+
+ // GPS tracking
+ useEffect(() => {
+  if (!navigator.geolocation) { setGpsError("GPS not available"); return; }
+  const id = navigator.geolocation.watchPosition(
+   (pos) => {
+    setUserPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+    setGpsAccuracy(pos.coords.accuracy);
+    setGpsError(null);
+   },
+   (err) => setGpsError(err.message),
+   { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+  );
+  gpsWatchRef.current = id;
+  return () => navigator.geolocation.clearWatch(id);
+ }, []);
+
+ // Update user position marker on map
+ useEffect(() => {
+  if (!mapInstance.current || !mapReady || !userPos) return;
+  if (!userMarkerRef.current) {
+   const el = document.createElement("div");
+   el.style.cssText = "width:16px;height:16px;border-radius:50%;background:#3B82F6;border:3px solid #fff;box-shadow:0 0 0 6px rgba(59,130,246,0.2),0 2px 6px rgba(0,0,0,0.3);";
+   userMarkerRef.current = new maplibregl.Marker({ element: el }).setLngLat([userPos.lng, userPos.lat]).addTo(mapInstance.current);
+  } else {
+   userMarkerRef.current.setLngLat([userPos.lng, userPos.lat]);
+  }
+  // Update accuracy circle
+  const accSrc = mapInstance.current.getSource("gps-accuracy");
+  if (accSrc) accSrc.setData({ type: "Feature", geometry: { type: "Point", coordinates: [userPos.lng, userPos.lat] }, properties: {} });
+ }, [mapReady, userPos]);
+
+ // Handle pole click
+ const handlePoleClick = useCallback((pole, pi) => {
+  if (!liveSession) return;
+  // Set start pole
+  if (!liveSession.startPole) {
+   setLiveSession({ ...liveSession, startPole: pole.id, currentPole: pole.id });
+   if (mapInstance.current) mapInstance.current.flyTo({ center: [pole.lng, pole.lat], zoom: 16, duration: 800 });
+   return;
+  }
+  const isCurrent = liveSession.currentPole === pole.id;
+  const isCompleted = spans.some(s => s.toPole === pole.id) || liveSession.startPole === pole.id;
+  const nextIdx = poles.findIndex(p => p.id === liveSession.currentPole) + 1;
+  const isNext = nextIdx === pi && !isCompleted;
+  if (isCurrent || (!isNext && !isCompleted)) return;
+
+  if (isNext) {
+   const fromPole = liveSession.currentPole;
+   const fromIdx = poles.findIndex(p => p.id === fromPole);
+   const dist = poles[fromIdx]?.distToNext || 0;
+   setLiveSession({
+    ...liveSession,
+    currentPole: pole.id,
+    spans: [...liveSession.spans, { fromPole, toPole: pole.id, workTypes: [liveSession.workType], footage: dist, anchor: false, coil: false, snowshoe: false, poleTransfer: false, fiberSeq: "" }]
+   });
+   if (mapInstance.current) mapInstance.current.flyTo({ center: [pole.lng, pole.lat], zoom: 16, duration: 600 });
+  }
+ }, [liveSession, poles, spans]);
+
+ const totalFt = spans.reduce((s, sp) => s + sp.footage, 0);
+ const progress = poles.length > 1 ? Math.round((spans.length / (poles.length - 1)) * 100) : 0;
+
+ return (
+  <div>
+   {/* Map Header */}
+   <div style={{ background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden", marginBottom: 12 }}>
+    <div style={{ padding: "12px 14px", borderBottom: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+     <div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: T.text }}>Live Mode — {job.feederId}</div>
+      <div style={{ fontSize: 11, color: T.textMuted }}>{poles.length} poles · {poles.reduce((s, p) => s + (p.distToNext || 0), 0).toLocaleString()} ft total</div>
+     </div>
+     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {gpsAccuracy && <span style={{ fontSize: 10, color: gpsAccuracy < 15 ? T.success : gpsAccuracy < 30 ? T.warning : T.danger, fontWeight: 600 }}>GPS ±{Math.round(gpsAccuracy)}m</span>}
+      {!liveSession?<Btn onClick={()=>setLiveSession({startPole:null,currentPole:null,spans:[],workType:"S+F"})} style={{background:T.success}}>Start Build</Btn>:<Badge label="● LIVE" color={T.success} bg={T.successSoft}/>}
+     </div>
+    </div>
+
+    {/* Work Type Selector */}
+    {liveSession && <div style={{ padding: "8px 14px", borderBottom: `1px solid ${T.border}`, display: "flex", gap: 4 }}>
+     {["S+F", "Overlash", "Fiber", "Strand"].map(wt => {
+      const active = liveSession.workType === wt;
+      const wtC = { "S+F": "#3B82F6", Overlash: "#22C55E", Fiber: "#C084FC", Strand: "#F0F0F0" }[wt] || T.accent;
+      return <button key={wt} onClick={() => setLiveSession({ ...liveSession, workType: wt })} style={{ padding: "5px 12px", borderRadius: 6, border: `1.5px solid ${active ? wtC : T.border}`, background: active ? wtC + "18" : "transparent", color: active ? wtC : T.textDim, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{wt === "S+F" ? "S+F" : wt === "Overlash" ? "OVL" : wt === "Fiber" ? "FBR" : "STR"}</button>;
+     })}
+    </div>}
+
+    {/* Map Container */}
+    <div ref={mapRef} style={{ width: "100%", height: 400, position: "relative" }}>
+     {gpsError && <div style={{ position: "absolute", top: 10, left: 10, zIndex: 10, padding: "6px 12px", borderRadius: 6, background: "rgba(248,113,113,0.9)", color: "#fff", fontSize: 11, fontWeight: 600 }}>GPS: {gpsError}</div>}
+    </div>
+
+    {/* Progress Bar */}
+    {liveSession && <div style={{ padding: "8px 14px", borderTop: `1px solid ${T.border}` }}>
+     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 4 }}>
+      <span style={{ color: T.textMuted }}>Progress</span>
+      <span style={{ fontWeight: 700, color: T.text }}>{spans.length}/{poles.length - 1} spans · {progress}%</span>
+     </div>
+     <div style={{ height: 4, borderRadius: 2, background: T.border, overflow: "hidden" }}>
+      <div style={{ height: "100%", width: `${progress}%`, borderRadius: 2, background: T.success, transition: "width 0.4s ease" }} />
+     </div>
+    </div>}
+   </div>
+
+   {/* Pole List (compact, below map) */}
+   <div style={{ background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden", marginBottom: 12 }}>
+    <div style={{ padding: "10px 14px", borderBottom: `1px solid ${T.border}`, fontSize: 12, fontWeight: 600, color: T.text }}>Pole Route</div>
+    <div style={{ maxHeight: 280, overflow: "auto" }}>
+     {poles.map((pole, pi) => {
+      const completedSpan = spans.find(s => s.toPole === pole.id);
+      const isStart = liveSession?.startPole === pole.id;
+      const isCurrent = liveSession?.currentPole === pole.id;
+      const isCompleted = !!completedSpan || (isStart && pi === 0);
+      const nextIdx = liveSession?.currentPole ? poles.findIndex(p => p.id === liveSession.currentPole) + 1 : -1;
+      const isNext = liveSession && nextIdx === pi && !isCompleted;
+      const borderColor = isCurrent ? T.success : isStart && pi === 0 ? T.accent : isCompleted ? T.success + "66" : isNext ? T.warning : T.border;
+
+      return <div key={pole.id}>
+       {pi > 0 && completedSpan && <div style={{ display: "flex", alignItems: "center", padding: "0 14px", gap: 6 }}>
+        <div style={{ flex: 1, height: 2, background: T.success }} />
+        <span style={{ fontSize: 10, fontWeight: 700, color: T.success, fontFamily: "monospace" }}>{completedSpan.footage} ft</span>
+        <span style={{ fontSize: 9, fontWeight: 600, color: { "S+F": "#3B82F6", Overlash: "#22C55E", Fiber: "#C084FC", Strand: T.accent }[completedSpan.workTypes?.[0]] || T.textDim }}>{completedSpan.workTypes?.[0] || "S+F"}</span>
+        <div style={{ flex: 1, height: 2, background: T.success }} />
+       </div>}
+       <div onClick={() => handlePoleClick(pole, pi)} style={{ padding: "8px 14px", display: "flex", alignItems: "center", gap: 10, cursor: liveSession ? "pointer" : "default", background: isCurrent ? T.success + "12" : isCompleted ? T.success + "06" : "transparent", borderLeft: `4px solid ${borderColor}` }}>
+        <div style={{ width: 28, height: 28, borderRadius: "50%", border: `2px solid ${isCurrent ? T.success : isCompleted ? T.success : T.border}`, background: isCurrent ? T.success : isCompleted ? T.success + "33" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: isCurrent ? "#fff" : isCompleted ? T.success : T.textMuted, flexShrink: 0 }}>{isCompleted ? "✓" : pi + 1}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+         <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{pole.label || `P${pi + 1}`}</div>
+         {isCurrent && <div style={{ fontSize: 10, color: T.success, fontWeight: 600 }}>● Current position</div>}
+         {isNext && <div style={{ fontSize: 10, color: T.warning, fontWeight: 600 }}>Tap when reached</div>}
+        </div>
+        {/* Hardware toggles for completed spans */}
+        {completedSpan && <div style={{ display: "flex", gap: 3 }}>
+         {[{ k: "anchor", l: "A", c: T.warning }, { k: "coil", l: "C", c: "#3B82F6" }, { k: "snowshoe", l: "S", c: T.success }, { k: "poleTransfer", l: "PT", c: T.orange }].map(att => {
+          const si = spans.findIndex(s => s.toPole === pole.id);
+          const active = si >= 0 && spans[si][att.k];
+          return <button key={att.k} onClick={e => { e.stopPropagation(); if (si < 0) return; const ns = [...spans]; ns[si] = { ...ns[si], [att.k]: !ns[si][att.k] }; setLiveSession({ ...liveSession, spans: ns }); }} style={{ width: 24, height: 24, borderRadius: 4, border: `1.5px solid ${active ? att.c : T.border}`, background: active ? att.c + "18" : "transparent", color: active ? att.c : T.textDim, fontSize: 8, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>{att.l}</button>;
+         })}
+        </div>}
+       </div>
+      </div>;
+     })}
+    </div>
+   </div>
+
+   {/* Session Summary */}
+   {liveSession && spans.length > 0 && <div style={{ background: T.bgCard, border: `1px solid ${T.success}44`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+    <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", marginBottom: 10 }}>Session Summary</div>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 6, marginBottom: 12 }}>
+     <div style={{ padding: 8, background: T.bgInput, borderRadius: 6, textAlign: "center" }}><div style={{ fontSize: 18, fontWeight: 700, color: T.text }}>{totalFt.toLocaleString()}</div><div style={{ fontSize: 9, color: T.textMuted }}>Total Feet</div></div>
+     <div style={{ padding: 8, background: T.bgInput, borderRadius: 6, textAlign: "center" }}><div style={{ fontSize: 18, fontWeight: 700, color: T.accent }}>{spans.length}</div><div style={{ fontSize: 9, color: T.textMuted }}>Spans</div></div>
+     <div style={{ padding: 8, background: T.bgInput, borderRadius: 6, textAlign: "center" }}><div style={{ fontSize: 18, fontWeight: 700, color: T.warning }}>{spans.filter(s => s.anchor).length}</div><div style={{ fontSize: 9, color: T.textMuted }}>Anchors</div></div>
+     <div style={{ padding: 8, background: T.bgInput, borderRadius: 6, textAlign: "center" }}><div style={{ fontSize: 18, fontWeight: 700, color: "#3B82F6" }}>{spans.filter(s => s.coil).length}</div><div style={{ fontSize: 9, color: T.textMuted }}>Coils</div></div>
+     <div style={{ padding: 8, background: T.bgInput, borderRadius: 6, textAlign: "center" }}><div style={{ fontSize: 18, fontWeight: 700, color: T.success }}>{spans.filter(s => s.snowshoe).length}</div><div style={{ fontSize: 9, color: T.textMuted }}>Snowshoes</div></div>
+    </div>
+    <div style={{ display: "flex", gap: 8 }}>
+     <div style={{ flex: 1 }}><label style={{ display: "block", fontSize: 11, fontWeight: 600, color: T.textMuted, marginBottom: 4 }}>Date Completed</label><input type="date" value={pf.completedDate} onChange={e => setPf({ ...pf, completedDate: e.target.value })} style={{ width: "100%", boxSizing: "border-box", background: T.bgInput, color: T.text, border: `1px solid ${T.border}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, outline: "none" }} /></div>
+     <button onClick={onSubmit} disabled={!pf.completedDate} style={{ alignSelf: "flex-end", padding: "10px 20px", borderRadius: 6, border: "none", background: !pf.completedDate ? T.border : T.success, color: !pf.completedDate ? T.textDim : "#fff", fontSize: 13, fontWeight: 700, cursor: pf.completedDate ? "pointer" : "default" }}>Submit Live Production</button>
+    </div>
+   </div>}
+  </div>
+ );
+}
+
 // ─── Compliance Helpers ─────────────────────────────────────────────────────
 function complianceStatus(dateStr){
  if(!dateStr)return{status:"unknown",label:"No Date",color:T.textDim,days:null};
@@ -552,42 +839,46 @@ function Inp({label,value,onChange,type="text",ph,disabled,style,options,textare
  </div>;
 }
 function Modal({open,onClose,title,children,width=560}){
+ const{isMobile:_m}=useApp();
  if(!open)return null;
- return <div style={{position:"fixed",inset:0,zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={onClose}>
+ return <div style={{position:"fixed",inset:0,zIndex:1000,display:"flex",alignItems:_m?"flex-end":"center",justifyContent:"center"}} onClick={onClose}>
  <div style={{position:"absolute",inset:0,background:"rgba(26,31,46,0.4)",backdropFilter:"blur(6px)"}}/>
- <div onClick={e=>e.stopPropagation()} style={{position:"relative",background:T.bgCard,border:`1px solid ${T.border}`,borderRadius:6,width,maxWidth:"92vw",maxHeight:"88vh",overflow:"auto",padding:28,boxShadow:"0 16px 48px rgba(0,0,0,0.12)"}}>
- <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
- <h2 style={{margin:0,fontSize:18,fontWeight:700,color:T.text}}>{title}</h2>
+ <div onClick={e=>e.stopPropagation()} style={{position:"relative",background:T.bgCard,border:`1px solid ${T.border}`,borderRadius:_m?"12px 12px 0 0":6,width:_m?"100%":width,maxWidth:_m?"100%":"92vw",maxHeight:_m?"92vh":"88vh",overflow:"auto",padding:_m?20:28,boxShadow:"0 16px 48px rgba(0,0,0,0.12)"}}>
+ <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:_m?14:20}}>
+ <h2 style={{margin:0,fontSize:_m?16:18,fontWeight:700,color:T.text}}>{title}</h2>
  <button onClick={onClose} style={{background:T.bgInput,border:`1px solid ${T.border}`,color:T.textMuted,cursor:"pointer",fontSize:14,padding:"4px 8px",borderRadius:4,lineHeight:1}}>✕</button>
  </div>{children}
  </div>
  </div>;
 }
 function DT({columns,data,onRowClick,expandedId,renderExpanded}){
- return <div style={{overflowX:"auto",borderRadius:4,border:`1px solid ${T.border}`}}>
- <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+ const{isMobile:_m}=useApp();
+ const mobileHide=["olt","feederId","compDate","lm","sr","fin","feet"];
+ const visCols=_m?columns.filter(c=>!mobileHide.includes(c.key)):columns;
+ return <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",borderRadius:4,border:`1px solid ${T.border}`}}>
+ <table style={{width:"100%",borderCollapse:"collapse",fontSize:_m?12:13}}>
  <thead><tr style={{background:T.bgInput}}>
- {columns.map(c=><th key={c.key} style={{textAlign:"left",padding:"10px 14px",color:T.textMuted,fontWeight:500,fontSize:11,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${T.border}`,whiteSpace:"nowrap"}}>{c.label}</th>)}
+ {visCols.map(c=><th key={c.key} style={{textAlign:"left",padding:_m?"8px 8px":"10px 14px",color:T.textMuted,fontWeight:500,fontSize:_m?10:11,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${T.border}`,whiteSpace:"nowrap"}}>{c.label}</th>)}
  </tr></thead>
  <tbody>
  {data.map((row,ri)=>{const isExp=expandedId&&expandedId===row.id;return <React.Fragment key={ri}>
- <tr onClick={()=>onRowClick?.(row)} style={{cursor:onRowClick?"pointer":"default",borderBottom:isExp?"none":`1px solid ${T.border}`,transition:"background 0.1s",background:isExp?T.accentSoft:"transparent"}} onMouseEnter={e=>{if(!isExp)e.currentTarget.style.background=T.bgCardHover;}} onMouseLeave={e=>{if(!isExp)e.currentTarget.style.background=isExp?T.accentSoft:"transparent";}}>
- {columns.map(c=><td key={c.key} style={{padding:"10px 14px",color:T.text,whiteSpace:"nowrap"}}>{c.render?c.render(row):row[c.key]}</td>)}
+ <tr onClick={()=>onRowClick?.(row)} style={{cursor:onRowClick?"pointer":"default",borderBottom:isExp?"none":`1px solid ${T.border}`,transition:"background 0.1s",background:isExp?T.accentSoft:"transparent"}} onMouseEnter={e=>{if(!_m&&!isExp)e.currentTarget.style.background=T.bgCardHover;}} onMouseLeave={e=>{if(!_m&&!isExp)e.currentTarget.style.background=isExp?T.accentSoft:"transparent";}}>
+ {visCols.map(c=><td key={c.key} style={{padding:_m?"8px 8px":"10px 14px",color:T.text,whiteSpace:"nowrap"}}>{c.render?c.render(row):row[c.key]}</td>)}
  </tr>
- {isExp&&renderExpanded&&<tr><td colSpan={columns.length} style={{padding:0,borderBottom:`1px solid ${T.border}`}}>{renderExpanded(row)}</td></tr>}
+ {isExp&&renderExpanded&&<tr><td colSpan={visCols.length} style={{padding:0,borderBottom:`1px solid ${T.border}`}}>{renderExpanded(row)}</td></tr>}
  </React.Fragment>;})}
- {data.length===0&&<tr><td colSpan={columns.length} style={{padding:40,textAlign:"center",color:T.textDim}}>No data found</td></tr>}
+ {data.length===0&&<tr><td colSpan={visCols.length} style={{padding:40,textAlign:"center",color:T.textDim}}>No data found</td></tr>}
  </tbody>
  </table>
  </div>;
 }
-function TabBar({tabs,active,onChange}){return <div style={{display:"flex",gap:2,background:T.bgInput,borderRadius:4,padding:3,marginBottom:20}}>{tabs.map(t=><button key={t.key} onClick={()=>onChange(t.key)} style={{flex:1,padding:"8px 14px",fontSize:12,fontWeight:600,borderRadius:3,border:"none",cursor:"pointer",background:active===t.key?T.bgCard:"transparent",color:active===t.key?T.text:T.textMuted,transition:"all 0.15s",boxShadow:active===t.key?`0 1px 2px rgba(0,0,0,0.04)`:"none"}}>{t.label}</button>)}</div>;}
-function SC({label,value,color,icon,sub}){return <Card style={{flex:1,minWidth:155,padding:16,borderLeft:`3px solid ${color||T.accent}`}}><div><div style={{fontSize:22,fontWeight:700,color:T.text,lineHeight:1,letterSpacing:-0.3}}>{value}</div><div style={{fontSize:10,color:T.textMuted,marginTop:4,fontWeight:500,textTransform:"uppercase",letterSpacing:0.3}}>{label}</div>{sub&&<div style={{fontSize:10,color:T.textDim,marginTop:2}}>{sub}</div>}</div></Card>;}
-const FR=(l,v)=><div style={{display:"flex",borderBottom:`1px solid ${T.border}22`,padding:"8px 0"}}><span style={{width:160,fontSize:12,color:T.textMuted,fontWeight:600}}>{l}</span><span style={{fontSize:13,color:T.text,fontWeight:500}}>{v||"—"}</span></div>;
+function TabBar({tabs,active,onChange}){const{isMobile:_m}=useApp();return <div style={{display:"flex",gap:2,background:T.bgInput,borderRadius:4,padding:3,marginBottom:_m?12:20,overflowX:_m?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",msOverflowStyle:"none"}}>{tabs.map(t=><button key={t.key} onClick={()=>onChange(t.key)} style={{flex:_m?"0 0 auto":1,padding:_m?"7px 12px":"8px 14px",fontSize:_m?11:12,fontWeight:600,borderRadius:3,border:"none",cursor:"pointer",background:active===t.key?T.bgCard:"transparent",color:active===t.key?T.text:T.textMuted,transition:"all 0.15s",boxShadow:active===t.key?`0 1px 2px rgba(0,0,0,0.04)`:"none",whiteSpace:"nowrap"}}>{t.label}</button>)}</div>;}
+function SC({label,value,color,icon,sub}){const{isMobile:_m}=useApp();return <Card style={{flex:1,minWidth:_m?100:155,padding:_m?12:16,borderLeft:`3px solid ${color||T.accent}`}}><div><div style={{fontSize:_m?18:22,fontWeight:700,color:T.text,lineHeight:1,letterSpacing:-0.3}}>{value}</div><div style={{fontSize:_m?9:10,color:T.textMuted,marginTop:_m?3:4,fontWeight:500,textTransform:"uppercase",letterSpacing:0.3}}>{label}</div>{sub&&<div style={{fontSize:_m?9:10,color:T.textDim,marginTop:2}}>{sub}</div>}</div></Card>;}
+const FR=(l,v)=><div style={{display:"flex",flexWrap:"wrap",borderBottom:`1px solid ${T.border}22`,padding:"8px 0"}}><span style={{width:130,minWidth:100,fontSize:12,color:T.textMuted,fontWeight:600}}>{l}</span><span style={{fontSize:13,color:T.text,fontWeight:500,flex:1,minWidth:0}}>{v||"—"}</span></div>;
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 function Dashboard(){
- const{jobs,rateCards,currentUser,tickets,trucks,drills,setView,setSelectedJob,setNavFrom,setJobsPreFilter}=useApp();
+ const{jobs,rateCards,currentUser,tickets,trucks,drills,setView,setSelectedJob,setNavFrom,setJobsPreFilter,isMobile:_m}=useApp();
  const navigateTo=(target,preFilter,label)=>{setNavFrom({view:"dashboard",label:"Dashboard"});if(preFilter)setJobsPreFilter(preFilter);setView(target);};
  const[fl,setFl]=useState({customer:"",region:"",lineman:"",investor:"",status:""});
  const[period,setPeriod]=useState("month");
@@ -650,23 +941,23 @@ function Dashboard(){
  const topProducer=Object.entries(d.byLm).sort((a,b)=>b[1].rev-a[1].rev)[0];
 
  return <div>
- <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+ <div style={{display:"flex",flexWrap:"wrap",justifyContent:"space-between",alignItems:"flex-start",marginBottom:_m?10:16,gap:_m?6:10}}>
  <div>
- <h1 style={{fontSize:20,fontWeight:600,margin:0,color:T.text}}>Dashboard</h1>
- <p style={{color:T.textMuted,fontSize:13,margin:"4px 0 0"}}>{d.fj.length} total jobs · {periodLabel}</p>
+ <h1 style={{fontSize:_m?17:20,fontWeight:600,margin:0,color:T.text}}>Dashboard</h1>
+ <p style={{color:T.textMuted,fontSize:_m?11:13,margin:"4px 0 0"}}>{d.fj.length} total jobs · {periodLabel}</p>
  </div>
- <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+ <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",width:_m?"100%":undefined}}>
  {/* Time period toggle */}
- <div style={{display:"flex",borderRadius:4,overflow:"hidden",border:`1px solid ${T.border}`,marginRight:8}}>
- {[{k:"week",l:"Week"},{k:"month",l:"Month"},{k:"year",l:"Year"},{k:"all",l:"All Time"}].map(p=>
+ <div style={{display:"flex",borderRadius:4,overflow:"hidden",border:`1px solid ${T.border}`,marginRight:_m?0:8,flex:_m?"1 1 100%":undefined}}>
+ {[{k:"week",l:"Week"},{k:"month",l:"Month"},{k:"year",l:"Year"},{k:"all",l:_m?"All":"All Time"}].map(p=>
  <button key={p.k} onClick={()=>setPeriod(p.k)} style={{
- padding:"7px 14px",border:"none",fontSize:12,fontWeight:700,cursor:"pointer",transition:"all 0.15s",
+ padding:_m?"7px 8px":"7px 12px",border:"none",fontSize:_m?10:11,fontWeight:700,cursor:"pointer",transition:"all 0.15s",flex:_m?1:undefined,
  background:period===p.k?T.accent:"transparent",color:period===p.k?"#fff":T.textMuted,
  }}>{p.l}</button>
  )}
  </div>
- <Inp value={fl.customer} onChange={v=>setFl({...fl,customer:v})} options={CUSTOMERS} ph="Customer" style={{marginBottom:0,minWidth:130,fontSize:11}}/>
- <Inp value={fl.region} onChange={v=>setFl({...fl,region:v})} options={REGIONS} ph="Region" style={{marginBottom:0,minWidth:110,fontSize:11}}/>
+ <Inp value={fl.customer} onChange={v=>setFl({...fl,customer:v})} options={CUSTOMERS} ph="Select..." style={{marginBottom:0,minWidth:_m?0:100,fontSize:11,flex:_m?"1 1 45%":undefined}}/>
+ <Inp value={fl.region} onChange={v=>setFl({...fl,region:v})} options={REGIONS} ph="Select..." style={{marginBottom:0,minWidth:_m?0:100,fontSize:11,flex:_m?"1 1 45%":undefined}}/>
  {(fl.customer||fl.region||fl.status)&&<Btn v="ghost" sz="sm" onClick={()=>setFl({customer:"",region:"",lineman:"",investor:"",status:""})}>✕</Btn>}
  </div>
  </div>
@@ -681,7 +972,7 @@ function Dashboard(){
  const compAlerts=[];
  (trucks||[]).forEach(t=>{const c=t.compliance;if(!c)return;[{d:c.dotInspection?.expires,l:"DOT"},{d:c.insurance?.expires,l:"Insurance"},{d:c.registration?.expires,l:"Reg"},{d:c.oilChange?.nextDue,l:"Oil"},{d:c.tireInspection?.nextDue,l:"Tires"}].forEach(x=>{const s=complianceStatus(x.d);if(s.status==="expired"||s.status==="critical")compAlerts.push({item:t.id,type:x.l,status:s});});});
  const totalActions=unassignedJobs.length+openTicketsList.length+compAlerts.length;
- return totalActions>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
+ return totalActions>0&&<div style={{display:"grid",gridTemplateColumns:_m?"repeat(2,1fr)":"repeat(4,1fr)",gap:10,marginBottom:16}}>
  <Card hover onClick={()=>navigateTo("jobs","Unassigned")} style={{padding:14,cursor:"pointer",borderLeft:`3px solid ${T.accent}`}}>
  <div style={{fontSize:24,fontWeight:600,color:unassignedJobs.length>0?T.text:T.textDim}}>{unassignedJobs.length}</div>
  <div style={{fontSize:11,color:T.textMuted,fontWeight:500}}>Unassigned Jobs</div>
@@ -714,24 +1005,24 @@ function Dashboard(){
  const hit=d.tFeet>=goal;
  const revPerFt=d.tFeet>0?(d.tRev/d.tFeet):0;
  const profPerFt=d.tFeet>0?(d.tProfit/d.tFeet):0;
- return <Card style={{marginBottom:16,padding:0,overflow:"hidden",borderColor:hit?T.success+"55":T.accent+"33"}}>
- <div style={{padding:"20px 24px 16px",background:T.bgCard}}>
- <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+ return <Card style={{marginBottom:_m?12:16,padding:0,overflow:"hidden",borderColor:hit?T.success+"55":T.accent+"33"}}>
+ <div style={{padding:_m?"14px 14px 12px":"20px 24px 16px",background:T.bgCard}}>
+ <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:_m?10:16,flexWrap:_m?"wrap":"nowrap",gap:_m?8:0}}>
  <div>
  <div style={{fontSize:10,fontWeight:700,color:T.textMuted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:6}}>{periodLabel} Footage Goal</div>
- <div style={{display:"flex",alignItems:"baseline",gap:8}}>
- <span style={{fontSize:44,fontWeight:600,color:hit?T.success:T.text,lineHeight:1,letterSpacing:-2}}>{feetLabel}</span>
- <span style={{fontSize:16,fontWeight:600,color:T.textMuted}}>/ {goalLabel} ft</span>
+ <div style={{display:"flex",alignItems:"baseline",gap:_m?4:8}}>
+ <span style={{fontSize:_m?30:44,fontWeight:600,color:hit?T.success:T.text,lineHeight:1,letterSpacing:-2}}>{feetLabel}</span>
+ <span style={{fontSize:_m?12:16,fontWeight:600,color:T.textMuted}}>/ {goalLabel} ft</span>
  </div>
  {hit
- ?<div style={{fontSize:13,fontWeight:700,color:T.success,marginTop:6,display:"flex",alignItems:"center",gap:5}}>Target Exceeded {((d.tFeet/goal)*100).toFixed(0)}% of target</div>
- :<div style={{fontSize:12,color:T.textMuted,marginTop:6}}>{(goal-d.tFeet).toLocaleString()} ft remaining · {(goalPct).toFixed(1)}% complete</div>
+ ?<div style={{fontSize:_m?11:13,fontWeight:700,color:T.success,marginTop:6,display:"flex",alignItems:"center",gap:5}}>Target Exceeded {((d.tFeet/goal)*100).toFixed(0)}%</div>
+ :<div style={{fontSize:_m?11:12,color:T.textMuted,marginTop:6}}>{(goal-d.tFeet).toLocaleString()} ft remaining · {(goalPct).toFixed(1)}%</div>
  }
  </div>
- <div style={{textAlign:"right"}}>
- <div style={{fontSize:32,fontWeight:600,color:T.success,lineHeight:1}}>{$(d.tRev)}</div>
+ <div style={{textAlign:_m?"left":"right"}}>
+ <div style={{fontSize:_m?22:32,fontWeight:600,color:T.success,lineHeight:1}}>{$(d.tRev)}</div>
  <div style={{fontSize:10,color:T.textMuted,marginTop:4}}>Revenue · {periodLabel.toLowerCase()}</div>
- <div style={{fontSize:18,fontWeight:600,color:T.accent,marginTop:6}}>{$(d.tProfit)}</div>
+ <div style={{fontSize:_m?14:18,fontWeight:600,color:T.accent,marginTop:_m?4:6}}>{$(d.tProfit)}</div>
  <div style={{fontSize:10,color:T.textMuted,marginTop:2}}>Profit · {pc(d.margin)} margin</div>
  </div>
  </div>
@@ -757,7 +1048,7 @@ function Dashboard(){
  </div>
  </div>
  </div>
- <div style={{display:"flex",borderTop:`1px solid ${T.border}`}}>
+ <div style={{display:"flex",flexWrap:_m?"wrap":"nowrap",borderTop:`1px solid ${T.border}`}}>
  {(()=>{
  const aerialJobs=d.tfj.filter(j=>j.department==="aerial");
  const ugJobs=d.tfj.filter(j=>j.department==="underground");
@@ -774,9 +1065,9 @@ function Dashboard(){
  {l:"Ready to Invoice",v:String(readyToInvoice)},
  {l:"Total Jobs",v:String(d.fj.length)},
  ];
- return items.map((s,i)=><div key={i} style={{flex:1,padding:"10px 8px",textAlign:"center",borderRight:i<5?`1px solid ${T.border}`:"none"}}>
- <div style={{fontSize:15,fontWeight:600,color:T.text}}>{s.v}</div>
- <div style={{fontSize:9,color:T.textMuted,marginTop:1}}>{s.l}</div>
+ return items.map((s,i)=><div key={i} style={{flex:_m?"1 1 33%":1,padding:_m?"8px 6px":"10px 8px",textAlign:"center",borderRight:_m?(i%3<2?`1px solid ${T.border}`:"none"):(i<5?`1px solid ${T.border}`:"none"),borderBottom:_m&&i<3?`1px solid ${T.border}`:"none"}}>
+ <div style={{fontSize:_m?13:15,fontWeight:600,color:T.text}}>{s.v}</div>
+ <div style={{fontSize:_m?8:9,color:T.textMuted,marginTop:1}}>{s.l}</div>
  </div>);
  })()}
  </div>
@@ -787,7 +1078,7 @@ function Dashboard(){
 
 
  {/* ── P&L BREAKDOWN + TOP PERFORMERS ── */}
- <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
+ <div style={{display:"grid",gridTemplateColumns:_m?"1fr":"1fr 1fr",gap:14,marginBottom:16}}>
  {/* Revenue by Customer */}
  <Card style={{padding:"18px 20px"}}>
  <h3 style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:14}}>Revenue by Customer</h3>
@@ -1162,7 +1453,7 @@ function RateCardsView(){
 
 // ─── JOBS MANAGEMENT ─────────────────────────────────────────────────────────
 function JobsMgmt(){
- const{jobs,setJobs,rateCards,currentUser,setView,setSelectedJob,trucks,drills,jobsPreFilter,setJobsPreFilter}=useApp();
+ const{jobs,setJobs,rateCards,currentUser,setView,setSelectedJob,trucks,drills,jobsPreFilter,setJobsPreFilter,isMobile:_m}=useApp();
  const[fl,setFl]=useState({status:jobsPreFilter||( currentUser.role==="billing"?"Ready to Invoice":""),customer:"",search:"",fin:""});
  const[showC,setShowC]=useState(false);
  const[expandedJobId,setExpandedJobId]=useState(null);
@@ -1384,23 +1675,23 @@ function JobsMgmt(){
  ];
 
  return <div>
- <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+ <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:_m?12:20,gap:8,flexWrap:"wrap"}}>
  <div>
- <h1 style={{fontSize:18,fontWeight:600,margin:0,color:T.text}}>
+ <h1 style={{fontSize:_m?16:18,fontWeight:600,margin:0,color:T.text}}>
  {isLM?"My Jobs":isRS?"Redline Queue":currentUser.role==="client_manager"?"Jobs — Review Queue":"Jobs Management"}
  </h1>
- <p style={{color:T.textMuted,fontSize:13,margin:"4px 0 0"}}>{displayData.length} job{displayData.length!==1?"s":""}{isRS&&rsTab!=="all"?` · filtered by "${rsTab}"`:""}</p>
+ <p style={{color:T.textMuted,fontSize:_m?11:13,margin:"4px 0 0"}}>{displayData.length} job{displayData.length!==1?"s":""}{isRS&&rsTab!=="all"?` · filtered by "${rsTab}"`:""}</p>
  </div>
  {["admin","supervisor"].includes(currentUser.role)&&<Btn onClick={()=>setShowC(true)}>+ New Job</Btn>}
  </div>
 
  {/* Redline specialist queue tabs */}
- {isRS&&<div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
- {[{k:"all",l:"All"},{k:"Pending Redlines",l:"Pending Redlines"},{k:"Under Client Review",l:"Under Review"},{k:"Rejected",l:"Rejected"}].map(t=>{
+ {isRS&&<div style={{display:"flex",gap:_m?4:6,marginBottom:_m?10:16,flexWrap:"wrap"}}>
+ {[{k:"all",l:"All"},{k:"Pending Redlines",l:_m?"Pending":"Pending Redlines"},{k:"Under Client Review",l:_m?"Review":"Under Review"},{k:"Rejected",l:"Rejected"}].map(t=>{
  const sc=STATUS_CFG[t.k]||{c:T.text,bg:"transparent"};const active=rsTab===t.k;const count=rsCounts[t.k]||0;
  return <button key={t.k} onClick={()=>setRsTab(t.k)} style={{
- display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:4,border:`1px solid ${active?sc.c||T.text:T.border}`,
- background:active?(sc.c||T.text)+"18":"transparent",color:active?sc.c||T.text:T.textMuted,fontSize:12,fontWeight:600,cursor:"pointer",transition:"all 0.15s",
+ display:"flex",alignItems:"center",gap:_m?4:6,padding:_m?"6px 10px":"7px 14px",borderRadius:4,border:`1px solid ${active?sc.c||T.text:T.border}`,
+ background:active?(sc.c||T.text)+"18":"transparent",color:active?sc.c||T.text:T.textMuted,fontSize:_m?11:12,fontWeight:600,cursor:"pointer",transition:"all 0.15s",
  }}>
  {t.l}
  <span style={{background:active?(sc.c||T.text)+"33":T.bgInput,padding:"1px 7px",borderRadius:4,fontSize:10,fontWeight:700,color:active?sc.c||T.text:T.textDim}}>{count}</span>
@@ -1409,19 +1700,19 @@ function JobsMgmt(){
  </div>}
 
  {/* Lineman weekly earnings tracker */}
- {isLM&&!isFM&&<Card style={{marginBottom:18,padding:0,overflow:"hidden",borderColor:T.accent+"44"}}>
+ {isLM&&!isFM&&<Card style={{marginBottom:_m?12:18,padding:0,overflow:"hidden",borderColor:T.accent+"44"}}>
  {/* Top section: This week's earnings */}
- <div style={{padding:"18px 20px 14px",background:T.bgCard}}>
- <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+ <div style={{padding:_m?"14px 14px 10px":"18px 20px 14px",background:T.bgCard}}>
+ <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:_m?10:14,gap:8}}>
  <div>
  <div style={{fontSize:10,color:T.textMuted,fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>This Week's Earnings</div>
- <div style={{fontSize:36,fontWeight:600,color:T.success,lineHeight:1.1,marginTop:4}}>{$(lmWeekEarnings.total)}</div>
+ <div style={{fontSize:_m?28:36,fontWeight:600,color:T.success,lineHeight:1.1,marginTop:4}}>{$(lmWeekEarnings.total)}</div>
  </div>
- <div style={{textAlign:"right"}}>
- <div style={{fontSize:11,color:T.textMuted}}>{daysLeft>0?`${daysLeft} day${daysLeft>1?"s":""} left`:"Week ends today!"}</div>
- <div style={{display:"flex",gap:3,marginTop:6,justifyContent:"flex-end"}}>
+ <div style={{textAlign:"right",flexShrink:0}}>
+ <div style={{fontSize:_m?10:11,color:T.textMuted}}>{daysLeft>0?`${daysLeft} day${daysLeft>1?"s":""} left`:"Week ends today!"}</div>
+ <div style={{display:"flex",gap:_m?2:3,marginTop:6,justifyContent:"flex-end"}}>
  {["M","T","W","T","F","S","S"].map((d,i)=><div key={i} style={{
- width:22,height:22,borderRadius:5,fontSize:9,fontWeight:700,
+ width:_m?18:22,height:_m?18:22,borderRadius:_m?4:5,fontSize:_m?8:9,fontWeight:700,
  display:"flex",alignItems:"center",justifyContent:"center",
  background:i===dayNum-1?T.success:i<dayNum-1?"rgba(34,197,94,0.25)":T.bgInput,
  color:i===dayNum-1?"#fff":i<dayNum-1?T.success:T.textDim,
@@ -1456,44 +1747,44 @@ function JobsMgmt(){
 
  {/* Bottom stats row */}
  <div style={{display:"flex",borderTop:`1px solid ${T.border}`}}>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
- <div style={{fontSize:18,fontWeight:600,color:T.text}}>{lmWeekEarnings.jobs}</div>
- <div style={{fontSize:10,color:T.textMuted}}>Jobs Done</div>
+ <div style={{flex:1,padding:_m?"8px 8px":"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:T.text}}>{lmWeekEarnings.jobs}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>Jobs Done</div>
  </div>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
- <div style={{fontSize:18,fontWeight:600,color:T.warning}}>{lmWeekEarnings.pending}</div>
- <div style={{fontSize:10,color:T.textMuted}}>Ready to Work</div>
+ <div style={{flex:1,padding:_m?"8px 8px":"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:T.warning}}>{lmWeekEarnings.pending}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>Ready to Work</div>
  </div>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center"}}>
- <div style={{fontSize:18,fontWeight:600,color:T.accent}}>{$(nextMilestone-lmWeekEarnings.total)}</div>
- <div style={{fontSize:10,color:T.textMuted}}>To Next Goal</div>
+ <div style={{flex:1,padding:_m?"8px 8px":"10px 16px",textAlign:"center"}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:T.accent}}>{$(nextMilestone-lmWeekEarnings.total)}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>To Next Goal</div>
  </div>
  </div>
 
- {lmWeekEarnings.pending>0&&<div style={{padding:"8px 16px",background:T.warningSoft,fontSize:12,color:T.warning,fontWeight:600,textAlign:"center"}}>
+ {lmWeekEarnings.pending>0&&<div style={{padding:_m?"6px 12px":"8px 16px",background:T.warningSoft,fontSize:_m?11:12,color:T.warning,fontWeight:600,textAlign:"center"}}>
  {lmWeekEarnings.pending} job{lmWeekEarnings.pending>1?"s":""} assigned — submit production to increase weekly total.
  </div>}
  </Card>}
 
  {/* Foreman weekly footage bonus tracker */}
- {isFM&&<Card style={{marginBottom:18,padding:0,overflow:"hidden",borderColor:fmWeekFootage.bonusHit?T.success+"66":T.cyan+"44"}}>
- <div style={{padding:"18px 20px 14px",background:T.bgCard}}>
- <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+ {isFM&&<Card style={{marginBottom:_m?12:18,padding:0,overflow:"hidden",borderColor:fmWeekFootage.bonusHit?T.success+"66":T.cyan+"44"}}>
+ <div style={{padding:_m?"14px 14px 10px":"18px 20px 14px",background:T.bgCard}}>
+ <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:_m?10:14,gap:8}}>
  <div>
  <div style={{fontSize:10,color:T.textMuted,fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>Weekly Bonus Tracker</div>
- <div style={{fontSize:36,fontWeight:600,color:fmWeekFootage.bonusHit?T.success:T.cyan,lineHeight:1.1,marginTop:4}}>
- {fmWeekFootage.totalFeet.toLocaleString()} <span style={{fontSize:16,fontWeight:600}}>ft</span>
+ <div style={{fontSize:_m?28:36,fontWeight:600,color:fmWeekFootage.bonusHit?T.success:T.cyan,lineHeight:1.1,marginTop:4}}>
+ {fmWeekFootage.totalFeet.toLocaleString()} <span style={{fontSize:_m?12:16,fontWeight:600}}>ft</span>
  </div>
  {fmWeekFootage.bonusHit
- ?<div style={{fontSize:12,fontWeight:700,color:T.success,marginTop:4,display:"flex",alignItems:"center",gap:4}}>Bonus Achieved — +$300!</div>
- :<div style={{fontSize:12,color:T.textMuted,marginTop:4}}>{fmFeetLeft.toLocaleString()} ft to go for <span style={{fontWeight:700,color:T.success}}>$300 bonus</span></div>
+ ?<div style={{fontSize:_m?11:12,fontWeight:700,color:T.success,marginTop:4,display:"flex",alignItems:"center",gap:4}}>Bonus Achieved — +$300!</div>
+ :<div style={{fontSize:_m?11:12,color:T.textMuted,marginTop:4}}>{fmFeetLeft.toLocaleString()} ft to go for <span style={{fontWeight:700,color:T.success}}>$300 bonus</span></div>
  }
  </div>
- <div style={{textAlign:"right"}}>
- <div style={{fontSize:11,color:T.textMuted}}>{daysLeft>0?`${daysLeft} day${daysLeft>1?"s":""} left`:"Week ends today!"}</div>
- <div style={{display:"flex",gap:3,marginTop:6,justifyContent:"flex-end"}}>
+ <div style={{textAlign:"right",flexShrink:0}}>
+ <div style={{fontSize:_m?10:11,color:T.textMuted}}>{daysLeft>0?`${daysLeft} day${daysLeft>1?"s":""} left`:"Week ends today!"}</div>
+ <div style={{display:"flex",gap:_m?2:3,marginTop:6,justifyContent:"flex-end"}}>
  {["M","T","W","T","F","S","S"].map((d,i)=><div key={i} style={{
- width:22,height:22,borderRadius:5,fontSize:9,fontWeight:700,
+ width:_m?18:22,height:_m?18:22,borderRadius:_m?4:5,fontSize:_m?8:9,fontWeight:700,
  display:"flex",alignItems:"center",justifyContent:"center",
  background:i===dayNum-1?T.success:i<dayNum-1?"rgba(34,197,94,0.25)":T.bgInput,
  color:i===dayNum-1?"#fff":i<dayNum-1?T.success:T.textDim,
@@ -1533,26 +1824,26 @@ function JobsMgmt(){
  </div>
 
  {/* Bottom stats row */}
- <div style={{display:"flex",borderTop:`1px solid ${T.border}`}}>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
- <div style={{fontSize:18,fontWeight:600,color:T.text}}>{fmWeekFootage.jobs}</div>
- <div style={{fontSize:10,color:T.textMuted}}>Jobs Done</div>
+ <div style={{display:"flex",flexWrap:_m?"wrap":"nowrap",borderTop:`1px solid ${T.border}`}}>
+ <div style={{flex:_m?"1 1 50%":1,padding:_m?"8px 8px":"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`,borderBottom:_m?`1px solid ${T.border}`:"none"}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:T.text}}>{fmWeekFootage.jobs}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>Jobs Done</div>
  </div>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
- <div style={{fontSize:18,fontWeight:600,color:T.warning}}>{fmWeekFootage.pending}</div>
- <div style={{fontSize:10,color:T.textMuted}}>Ready to Bore</div>
+ <div style={{flex:_m?"1 1 50%":1,padding:_m?"8px 8px":"10px 16px",textAlign:"center",borderRight:_m?"none":`1px solid ${T.border}`,borderBottom:_m?`1px solid ${T.border}`:"none"}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:T.warning}}>{fmWeekFootage.pending}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>Ready to Bore</div>
  </div>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
- <div style={{fontSize:18,fontWeight:600,color:T.success}}>{$(fmWeekFootage.earnings)}</div>
- <div style={{fontSize:10,color:T.textMuted}}>Week Earnings</div>
+ <div style={{flex:_m?"1 1 50%":1,padding:_m?"8px 8px":"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:T.success}}>{$(fmWeekFootage.earnings)}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>Week Earnings</div>
  </div>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center"}}>
- <div style={{fontSize:18,fontWeight:600,color:fmWeekFootage.bonusHit?T.success:T.cyan}}>{fmWeekFootage.bonusHit?"":"$300"}</div>
- <div style={{fontSize:10,color:T.textMuted}}>{fmWeekFootage.bonusHit?"Bonus Earned":"Bonus Goal"}</div>
+ <div style={{flex:_m?"1 1 50%":1,padding:_m?"8px 8px":"10px 16px",textAlign:"center"}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:fmWeekFootage.bonusHit?T.success:T.cyan}}>{fmWeekFootage.bonusHit?"":"$300"}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>{fmWeekFootage.bonusHit?"Bonus Earned":"Bonus Goal"}</div>
  </div>
  </div>
 
- {!fmWeekFootage.bonusHit&&fmWeekFootage.pending>0&&<div style={{padding:"8px 16px",background:T.cyanSoft,fontSize:12,color:T.cyan,fontWeight:600,textAlign:"center"}}>
+ {!fmWeekFootage.bonusHit&&fmWeekFootage.pending>0&&<div style={{padding:_m?"6px 12px":"8px 16px",background:T.cyanSoft,fontSize:_m?11:12,color:T.cyan,fontWeight:600,textAlign:"center"}}>
  {fmWeekFootage.pending} job{fmWeekFootage.pending>1?"s":""} assigned — complete {fmFeetLeft.toLocaleString()} additional ft for $300 weekly bonus.
  </div>}
  {fmWeekFootage.bonusHit&&<div style={{padding:"8px 16px",background:T.successSoft,fontSize:12,color:T.success,fontWeight:600,textAlign:"center"}}>
@@ -1561,26 +1852,26 @@ function JobsMgmt(){
  </Card>}
 
  {/* Supervisor weekly region tracker */}
- {isSV&&<Card style={{marginBottom:18,padding:0,overflow:"hidden",borderColor:T.accent+"44"}}>
- <div style={{padding:"18px 20px 14px",background:T.bgCard}}>
- <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+ {isSV&&<Card style={{marginBottom:_m?12:18,padding:0,overflow:"hidden",borderColor:T.accent+"44"}}>
+ <div style={{padding:_m?"14px 14px 10px":"18px 20px 14px",background:T.bgCard}}>
+ <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:_m?10:14,gap:8}}>
  <div>
  <div style={{fontSize:10,color:T.textMuted,fontWeight:700,textTransform:"uppercase",letterSpacing:1}}>This Week — {svScope.customer} · {svScope.region}</div>
- <div style={{fontSize:36,fontWeight:600,color:T.success,lineHeight:1.1,marginTop:4}}>{$(svWeekData.commission)}</div>
- <div style={{fontSize:12,color:T.textMuted,marginTop:4}}>commission earned this week</div>
+ <div style={{fontSize:_m?28:36,fontWeight:600,color:T.success,lineHeight:1.1,marginTop:4}}>{$(svWeekData.commission)}</div>
+ <div style={{fontSize:_m?11:12,color:T.textMuted,marginTop:4}}>commission earned this week</div>
  </div>
- <div style={{textAlign:"right"}}>
- <div style={{fontSize:11,color:T.textMuted}}>{daysLeft>0?`${daysLeft} day${daysLeft>1?"s":""} left`:"Week ends today!"}</div>
- <div style={{display:"flex",gap:3,marginTop:6,justifyContent:"flex-end"}}>
+ <div style={{textAlign:"right",flexShrink:0}}>
+ <div style={{fontSize:_m?10:11,color:T.textMuted}}>{daysLeft>0?`${daysLeft} day${daysLeft>1?"s":""} left`:"Week ends today!"}</div>
+ <div style={{display:"flex",gap:_m?2:3,marginTop:6,justifyContent:"flex-end"}}>
  {["M","T","W","T","F","S","S"].map((d,i)=><div key={i} style={{
- width:22,height:22,borderRadius:5,fontSize:9,fontWeight:700,
+ width:_m?18:22,height:_m?18:22,borderRadius:_m?4:5,fontSize:_m?8:9,fontWeight:700,
  display:"flex",alignItems:"center",justifyContent:"center",
  background:i===dayNum-1?T.success:i<dayNum-1?"rgba(34,197,94,0.25)":T.bgInput,
  color:i===dayNum-1?"#fff":i<dayNum-1?T.success:T.textDim,
  border:`1px solid ${i===dayNum-1?T.success:i<dayNum-1?"rgba(34,197,94,0.35)":T.border}`,
  }}>{d}</div>)}
  </div>
- <div style={{fontSize:20,fontWeight:600,color:T.text,marginTop:8}}>{$(svWeekData.totalPay)}</div>
+ <div style={{fontSize:_m?16:20,fontWeight:600,color:T.text,marginTop:8}}>{$(svWeekData.totalPay)}</div>
  <div style={{fontSize:10,color:T.textMuted}}>total this week</div>
  </div>
  </div>
@@ -1604,22 +1895,22 @@ function JobsMgmt(){
  </div>
  </div>
 
- <div style={{display:"flex",borderTop:`1px solid ${T.border}`}}>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
- <div style={{fontSize:18,fontWeight:600,color:T.text}}>{svWeekData.jobs}</div>
- <div style={{fontSize:10,color:T.textMuted}}>Jobs Completed</div>
+ <div style={{display:"flex",flexWrap:_m?"wrap":"nowrap",borderTop:`1px solid ${T.border}`}}>
+ <div style={{flex:_m?"1 1 50%":1,padding:_m?"8px 8px":"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`,borderBottom:_m?`1px solid ${T.border}`:"none"}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:T.text}}>{svWeekData.jobs}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>Jobs Completed</div>
  </div>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
- <div style={{fontSize:18,fontWeight:600,color:T.text}}>{svWeekData.totalFeet.toLocaleString()}</div>
- <div style={{fontSize:10,color:T.textMuted}}>Footage</div>
+ <div style={{flex:_m?"1 1 50%":1,padding:_m?"8px 8px":"10px 16px",textAlign:"center",borderRight:_m?"none":`1px solid ${T.border}`,borderBottom:_m?`1px solid ${T.border}`:"none"}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:T.text}}>{svWeekData.totalFeet.toLocaleString()}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>Footage</div>
  </div>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
- <div style={{fontSize:18,fontWeight:600,color:T.text}}>{svWeekData.regionJobs}</div>
- <div style={{fontSize:10,color:T.textMuted}}>Region Jobs</div>
+ <div style={{flex:_m?"1 1 50%":1,padding:_m?"8px 8px":"10px 16px",textAlign:"center",borderRight:`1px solid ${T.border}`}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:T.text}}>{svWeekData.regionJobs}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>Region Jobs</div>
  </div>
- <div style={{flex:1,padding:"10px 16px",textAlign:"center"}}>
- <div style={{fontSize:18,fontWeight:600,color:T.success}}>{$(svWeekData.commission)}</div>
- <div style={{fontSize:10,color:T.textMuted}}>{(svCommRate*100).toFixed(0)}% Commission</div>
+ <div style={{flex:_m?"1 1 50%":1,padding:_m?"8px 8px":"10px 16px",textAlign:"center"}}>
+ <div style={{fontSize:_m?16:18,fontWeight:600,color:T.success}}>{$(svWeekData.commission)}</div>
+ <div style={{fontSize:_m?9:10,color:T.textMuted}}>{(svCommRate*100).toFixed(0)}% Commission</div>
  </div>
  </div>
 
@@ -1631,17 +1922,17 @@ function JobsMgmt(){
  </div>}
  </Card>}
 
- <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
- <Inp value={fl.search} onChange={v=>setFl({...fl,search:v})} ph={isLM?"Search feeder, location...":isRS?"Search feeder, OLT, location...":"Search ID, feeder, OLT, location..."} style={{marginBottom:0,flex:1,minWidth:200}}/>
- {!isLM&&!isRS&&<Inp value={fl.status} onChange={v=>setFl({...fl,status:v})} options={Object.keys(STATUS_CFG)} style={{marginBottom:0,minWidth:160}}/>}
- {!isLM&&!isRS&&<Inp value={fl.customer} onChange={v=>setFl({...fl,customer:v})} options={CUSTOMERS} style={{marginBottom:0,minWidth:160}}/>}
- {isAdm&&<Inp value={fl.fin} onChange={v=>setFl({...fl,fin:v})} options={["Calculated","Missing Rate","No Production","Mapping Needed"]} style={{marginBottom:0,minWidth:150}}/>}
+ <div style={{display:"flex",gap:_m?6:10,marginBottom:_m?10:16,flexWrap:"wrap"}}>
+ <Inp value={fl.search} onChange={v=>setFl({...fl,search:v})} ph={isLM?"Search feeder, location...":isRS?"Search feeder, OLT, location...":"Search ID, feeder, OLT, location..."} style={{marginBottom:0,flex:1,minWidth:_m?140:200}}/>
+ {!isLM&&!isRS&&<Inp value={fl.status} onChange={v=>setFl({...fl,status:v})} options={Object.keys(STATUS_CFG)} style={{marginBottom:0,minWidth:_m?0:160,flex:_m?"1 1 45%":undefined}}/>}
+ {!isLM&&!isRS&&<Inp value={fl.customer} onChange={v=>setFl({...fl,customer:v})} options={CUSTOMERS} style={{marginBottom:0,minWidth:_m?0:160,flex:_m?"1 1 45%":undefined}}/>}
+ {isAdm&&<Inp value={fl.fin} onChange={v=>setFl({...fl,fin:v})} options={["Calculated","Missing Rate","No Production","Mapping Needed"]} style={{marginBottom:0,minWidth:_m?0:150,flex:_m?"1 1 100%":undefined}}/>}
  </div>
 
- {!isLM&&!isRS&&<div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center"}}>
- <span style={{fontSize:11,color:T.textDim,fontWeight:600}}>Sort:</span>
+ {!isLM&&!isRS&&<div style={{display:"flex",gap:_m?4:6,marginBottom:8,alignItems:"center",overflowX:_m?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",paddingBottom:_m?2:0}}>
+ <span style={{fontSize:_m?10:11,color:T.textDim,fontWeight:600,flexShrink:0}}>Sort:</span>
  {[{k:"date",l:"Date"},{k:"status",l:"Status"},{k:"customer",l:"Customer"},{k:"id",l:"ID"},...(currentUser.role==="admin"?[{k:"revenue",l:"Revenue"}]:[])].map(s=>
- <button key={s.k} onClick={()=>toggleSort(s.k)} style={{padding:"3px 10px",borderRadius:5,fontSize:11,fontWeight:600,border:`1px solid ${sortKey===s.k?T.accent:T.border}`,background:sortKey===s.k?T.accentSoft:"transparent",color:sortKey===s.k?T.accent:T.textMuted,cursor:"pointer",transition:"all 0.15s"}}>
+ <button key={s.k} onClick={()=>toggleSort(s.k)} style={{padding:_m?"3px 8px":"3px 10px",borderRadius:5,fontSize:_m?10:11,fontWeight:600,border:`1px solid ${sortKey===s.k?T.accent:T.border}`,background:sortKey===s.k?T.accentSoft:"transparent",color:sortKey===s.k?T.accent:T.textMuted,cursor:"pointer",transition:"all 0.15s",whiteSpace:"nowrap",flexShrink:0}}>
  {s.l}{sortKey===s.k?(sortDir==="asc"?" ▲":" ▼"):""}
  </button>
  )}
@@ -1664,7 +1955,7 @@ function JobsMgmt(){
  )}
  </div>
  </div>
- <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 16px"}}>
+ <div style={{display:"grid",gridTemplateColumns:_m?"1fr":"1fr 1fr",gap:_m?"0":"0 16px"}}>
  <Inp label="Client" value={nj.client} onChange={v=>setNj({...nj,client:v})} options={CLIENTS}/>
  <Inp label="Customer" value={nj.customer} onChange={v=>setNj({...nj,customer:v})} options={CUSTOMERS}/>
  <Inp label="Region" value={nj.region} onChange={v=>setNj({...nj,region:v,location:""})} options={REGIONS}/>
@@ -1833,13 +2124,13 @@ function JobDetail({job:jobProp,inline}={})  {
  </div>}
 
  {/* Inline mode header */}
- {inline&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
- <h2 style={{fontSize:16,fontWeight:700,margin:0,color:T.text}}>{j.feederId}</h2>
+ {inline&&<div style={{display:"flex",alignItems:"center",gap:_m?6:10,marginBottom:_m?10:14,flexWrap:"wrap"}}>
+ <h2 style={{fontSize:_m?14:16,fontWeight:700,margin:0,color:T.text}}>{j.feederId}</h2>
  {!isLM&&<SB status={j.status}/>}
  {isLM&&(j.production?<Badge label="Submitted" color={T.success} bg={T.successSoft}/>:<Badge label="Needs Production" color={T.warning} bg={T.warningSoft}/>)}
  {canFin&&<FB status={fin.status}/>}
- <span style={{color:T.textMuted,fontSize:12}}>{j.customer} · {j.region} · {j.olt}{lm?` · ${lm.name}`:""}</span>
- {j.srNumber&&<span style={{fontSize:11,fontFamily:"monospace",color:T.success,fontWeight:700}}>SR# {j.srNumber}</span>}
+ <span style={{color:T.textMuted,fontSize:_m?10:12}}>{j.customer} · {j.region}{_m?"":" · "+j.olt}{lm?` · ${lm.name}`:""}</span>
+ {j.srNumber&&<span style={{fontSize:_m?10:11,fontFamily:"monospace",color:T.success,fontWeight:700}}>SR# {j.srNumber}</span>}
  </div>}
 
  <TabBar tabs={tabs} active={tab} onChange={setTab}/>
@@ -2036,40 +2327,7 @@ function JobDetail({job:jobProp,inline}={})  {
 
  {liveProdMode&&!isUG&&<div>
  {(!j.routePoles||j.routePoles.length<2)?<Card style={{padding:40,textAlign:"center"}}><div style={{fontSize:16,fontWeight:600,color:T.text,marginBottom:4}}>Route Not Set Up Yet</div><div style={{fontSize:13,color:T.textMuted}}>Admin needs to set up the pole route first. Use Production Sheet for now.</div><Btn onClick={()=>setLiveProdMode(false)} style={{marginTop:16}}>Switch to Sheet</Btn></Card>
- :<div>
- <Card style={{marginBottom:12,padding:14,background:`linear-gradient(135deg,${T.success}08,${T.bgCard})`,borderColor:T.success+"44"}}>
- <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
- <div><div style={{fontSize:14,fontWeight:700,color:T.text}}>Live Mode — {j.feederId}</div><div style={{fontSize:12,color:T.textMuted}}>{j.routePoles.length} poles · {j.routePoles.reduce((s,p)=>s+(p.distToNext||0),0)} ft total</div></div>
- {!liveSession?<Btn onClick={()=>setLiveSession({startPole:null,currentPole:null,spans:[],workType:"S+F"})} style={{background:T.success}}>Start Build</Btn>:<Badge label="● LIVE" color={T.success} bg={T.successSoft}/>}
- </div></Card>
- <Card style={{padding:0,overflow:"hidden",marginBottom:14}}>
- <div style={{padding:"10px 14px",background:T.bgInput,borderBottom:`1px solid ${T.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
- <div style={{fontSize:12,fontWeight:600,color:T.text}}>Pole Route</div>
- {liveSession&&<div style={{display:"flex",gap:4}}>{["S+F","Overlash","Fiber","Strand"].map(wt=>{const active=liveSession.workType===wt;const wtC={"S+F":T.cyan,Overlash:T.warning,Fiber:T.purple,Strand:T.accent}[wt]||T.accent;return <button key={wt} onClick={()=>setLiveSession({...liveSession,workType:wt})} style={{padding:"4px 10px",borderRadius:6,border:`1.5px solid ${active?wtC:T.border}`,background:active?wtC+"18":"transparent",color:active?wtC:T.textDim,fontSize:10,fontWeight:700,cursor:"pointer"}}>{wt==="S+F"?"S+F":wt==="Overlash"?"OVL":wt==="Fiber"?"FBR":"STR"}</button>;})}</div>}
- </div>
- {j.routePoles.map((pole,pi)=>{const completedSpan=liveSession?.spans?.find(s=>s.toPole===pole.id);const isStart=liveSession?.startPole===pole.id;const isCurrent=liveSession?.currentPole===pole.id;const isCompleted=!!completedSpan;const isNext=liveSession&&liveSession.currentPole&&!isCompleted&&pi===j.routePoles.findIndex(p=>p.id===liveSession.currentPole)+1;const borderColor=isCurrent?T.success:isStart?T.accent:isCompleted?T.success+"66":isNext?T.warning:T.border;
- return <div key={pole.id}>
- {pi>0&&<div style={{display:"flex",alignItems:"center",padding:"0 14px",gap:8}}><div style={{flex:1,height:2,background:isCompleted?T.success:T.border}}/>{completedSpan&&<span style={{fontSize:10,fontWeight:700,color:T.success,fontFamily:"monospace"}}>{completedSpan.footage} ft</span>}<div style={{flex:1,height:2,background:isCompleted?T.success:T.border}}/></div>}
- <div onClick={()=>{if(!liveSession)return;if(!liveSession.startPole){setLiveSession({...liveSession,startPole:pole.id,currentPole:pole.id});return;}if(isCurrent||(!isNext&&!isCompleted))return;const fromPole=liveSession.currentPole;const fromIdx=j.routePoles.findIndex(p=>p.id===fromPole);const dist=j.routePoles[fromIdx]?.distToNext||0;setLiveSession({...liveSession,currentPole:pole.id,spans:[...liveSession.spans,{fromPole,toPole:pole.id,workTypes:[liveSession.workType],footage:dist,anchor:false,coil:false,snowshoe:false,poleTransfer:false,fiberSeq:""}]});}} style={{padding:"10px 14px",display:"flex",alignItems:"center",gap:12,cursor:liveSession?"pointer":"default",background:isCurrent?T.success+"12":isCompleted?T.success+"06":"transparent",borderLeft:`4px solid ${borderColor}`}}>
- <div style={{width:36,height:36,borderRadius:"50%",border:`3px solid ${isCurrent?T.success:isCompleted?T.success:T.border}`,background:isCurrent?T.success:isCompleted?T.success+"33":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:isCurrent?"#fff":isCompleted?T.success:T.textMuted,flexShrink:0}}>{isCompleted?"✓":pole.label||pi+1}</div>
- <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600,color:T.text}}>Pole {pole.label||pi+1}</div>{isCurrent&&<div style={{fontSize:11,color:T.success,fontWeight:600}}>● You are here</div>}{isNext&&<div style={{fontSize:11,color:T.warning,fontWeight:600}}>Tap when reached</div>}{completedSpan&&<div style={{fontSize:11,color:T.textMuted}}>Completed · {completedSpan.footage} ft</div>}</div>
- {isCompleted&&<div style={{display:"flex",gap:4}}>{[{k:"anchor",l:"A",c:T.warning},{k:"coil",l:"C",c:T.cyan},{k:"snowshoe",l:"S",c:T.success},{k:"poleTransfer",l:"PT",c:T.orange}].map(att=>{const si=liveSession.spans.findIndex(s=>s.toPole===pole.id);const active=si>=0&&liveSession.spans[si][att.k];return <button key={att.k} onClick={e=>{e.stopPropagation();if(si<0)return;const ns=[...liveSession.spans];ns[si]={...ns[si],[att.k]:!ns[si][att.k]};setLiveSession({...liveSession,spans:ns});}} style={{width:28,height:28,borderRadius:6,border:`1.5px solid ${active?att.c:T.border}`,background:active?att.c+"18":"transparent",color:active?att.c:T.textDim,fontSize:9,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>{att.l}</button>;})}</div>}
- </div></div>;})}
- </Card>
- {liveSession&&liveSession.spans.length>0&&<Card style={{padding:14,marginBottom:14,borderColor:T.success+"44"}}>
- <div style={{fontSize:12,fontWeight:700,color:T.textMuted,textTransform:"uppercase",marginBottom:10}}>Session Summary</div>
- <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginBottom:12}}>
- <div style={{padding:10,background:T.bgInput,borderRadius:6,textAlign:"center"}}><div style={{fontSize:20,fontWeight:700,color:T.text}}>{liveSession.spans.reduce((s,sp)=>s+sp.footage,0)}</div><div style={{fontSize:9,color:T.textMuted}}>Total Feet</div></div>
- <div style={{padding:10,background:T.bgInput,borderRadius:6,textAlign:"center"}}><div style={{fontSize:20,fontWeight:700,color:T.accent}}>{liveSession.spans.length}</div><div style={{fontSize:9,color:T.textMuted}}>Spans</div></div>
- <div style={{padding:10,background:T.bgInput,borderRadius:6,textAlign:"center"}}><div style={{fontSize:20,fontWeight:700,color:T.warning}}>{liveSession.spans.filter(s=>s.anchor).length}</div><div style={{fontSize:9,color:T.textMuted}}>Anchors</div></div>
- <div style={{padding:10,background:T.bgInput,borderRadius:6,textAlign:"center"}}><div style={{fontSize:20,fontWeight:700,color:T.cyan}}>{liveSession.spans.filter(s=>s.coil).length}</div><div style={{fontSize:9,color:T.textMuted}}>Coils</div></div>
- <div style={{padding:10,background:T.bgInput,borderRadius:6,textAlign:"center"}}><div style={{fontSize:20,fontWeight:700,color:T.success}}>{liveSession.spans.filter(s=>s.snowshoe).length}</div><div style={{fontSize:9,color:T.textMuted}}>Snowshoes</div></div>
- </div>
- <div style={{display:"flex",gap:8}}>
- <div style={{flex:1}}><label style={{display:"block",fontSize:11,fontWeight:600,color:T.textMuted,marginBottom:4}}>Date Completed</label><input type="date" value={pf.completedDate} onChange={e=>setPf({...pf,completedDate:e.target.value})} style={{width:"100%",boxSizing:"border-box",background:T.bgInput,color:T.text,border:`1px solid ${T.border}`,borderRadius:4,padding:"10px 12px",fontSize:13,outline:"none"}}/></div>
- <Btn onClick={()=>{const spans=liveSession.spans.map((sp,i)=>({spanId:i+1,spanWorkType:sp.workTypes[0]||"S+F",strandSpan:sp.footage,anchora:sp.anchor,fiberMarking:sp.fiberSeq||"",coil:sp.coil,poleTransfer:sp.poleTransfer,snowshoe:sp.snowshoe}));const totalFeet=spans.reduce((s,sp)=>s+sp.strandSpan,0);const p={completedDate:pf.completedDate,totalFeet,totalStrand:totalFeet,totalFiber:totalFeet,totalOverlash:0,totalConduit:0,anchors:spans.filter(s=>s.anchora).length,coils:spans.filter(s=>s.coil).length,snowshoes:spans.filter(s=>s.snowshoe).length,poleTransfers:spans.filter(s=>s.poleTransfer).length,entries:spans.length,spans,liveMode:true,comments:pf.comments,submittedAt:new Date().toISOString(),submittedBy:currentUser.id};upd({production:p,workType:"Strand",status:"Pending Redlines"});setTab("production");setLiveSession(null);}} disabled={!pf.completedDate} style={{alignSelf:"flex-end",background:T.success}}>Submit Live Production</Btn>
- </div></Card>}
- </div>}
+ :<LiveModeMap job={j} liveSession={liveSession} setLiveSession={setLiveSession} onSubmit={()=>{const spns=liveSession.spans.map((sp,i)=>({spanId:i+1,spanWorkType:sp.workTypes[0]||"S+F",strandSpan:sp.footage,anchora:sp.anchor,fiberMarking:sp.fiberSeq||"",coil:sp.coil,poleTransfer:sp.poleTransfer,snowshoe:sp.snowshoe}));const totalFeet=spns.reduce((s,sp)=>s+sp.strandSpan,0);const p={completedDate:pf.completedDate,totalFeet,totalStrand:totalFeet,totalFiber:totalFeet,totalOverlash:0,totalConduit:0,anchors:spns.filter(s=>s.anchora).length,coils:spns.filter(s=>s.coil).length,snowshoes:spns.filter(s=>s.snowshoe).length,poleTransfers:spns.filter(s=>s.poleTransfer).length,entries:spns.length,spans:spns,liveMode:true,comments:pf.comments,submittedAt:new Date().toISOString(),submittedBy:currentUser.id};upd({production:p,workType:"Strand",status:"Pending Redlines"});setTab("production");setLiveSession(null);}} pf={pf} setPf={setPf} currentUser={currentUser}/>}
  </div>}
 
  <div style={{display:(!liveProdMode||isUG)?"block":"none"}}>
@@ -3480,14 +3738,14 @@ function NavBtn({active,collapsed,onClick,title,icon,label,badge,sidebarTheme}){
 }
 
 // ─── SIDEBAR ─────────────────────────────────────────────────────────────────
-function Sidebar({view,setView,currentUser,onSwitch,sidebarOpen,setSidebarOpen}){
+function Sidebar({view,setView,currentUser,onSwitch,sidebarOpen,setSidebarOpen,isMobile}){
  const ctx=useApp();
  const{jobs,rateCards,dark,setDark,trucks,drills,tickets}=useApp();
- const collapsed=!sidebarOpen;
- const W=sidebarOpen?240:56;
+ const collapsed=isMobile?false:!sidebarOpen; // On mobile, sidebar is always "expanded" when shown
+ const W=isMobile?280:(sidebarOpen?240:56);
  const sidebarTimerRef=React.useRef(null);
- const handleMouseEnter=()=>{clearTimeout(sidebarTimerRef.current);setSidebarOpen(true);};
- const handleMouseLeave=()=>{clearTimeout(sidebarTimerRef.current);sidebarTimerRef.current=setTimeout(()=>setSidebarOpen(false),120);};
+ const handleMouseEnter=()=>{if(isMobile)return;clearTimeout(sidebarTimerRef.current);setSidebarOpen(true);};
+ const handleMouseLeave=()=>{if(isMobile)return;clearTimeout(sidebarTimerRef.current);sidebarTimerRef.current=setTimeout(()=>setSidebarOpen(false),120);};
  // Compute lineman earnings for sidebar — current week only
  const lmEarnings=useMemo(()=>{
  if(currentUser.role!=="lineman"&&currentUser.role!=="foreman")return null;
@@ -3573,7 +3831,8 @@ function Sidebar({view,setView,currentUser,onSwitch,sidebarOpen,setSidebarOpen})
 
  const S=SIDEBAR_THEME;// Sidebar always dark
 
- return <div onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave} style={{width:W,minHeight:"100vh",background:S.bg,borderRight:`1px solid ${S.border}`,display:"flex",flexDirection:"column",position:"fixed",left:0,top:0,bottom:0,zIndex:100,transition:"width 0.22s cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 0.22s ease",overflow:"hidden",whiteSpace:"nowrap",boxShadow:sidebarOpen?`8px 0 24px rgba(0,0,0,0.25)`:"none"}}>
+ return <>{isMobile&&sidebarOpen&&<div onClick={()=>setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:99,animation:"fadeIn 0.15s ease"}}/>}
+ <div onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave} style={{width:W,minHeight:"100vh",background:S.bg,borderRight:`1px solid ${S.border}`,display:"flex",flexDirection:"column",position:"fixed",left:isMobile?(sidebarOpen?0:-300):0,top:0,bottom:0,zIndex:100,transition:isMobile?"left 0.28s cubic-bezier(0.25, 0.1, 0.25, 1)":"width 0.22s cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 0.22s ease",overflow:isMobile?"auto":"hidden",whiteSpace:"nowrap",boxShadow:sidebarOpen?`8px 0 24px rgba(0,0,0,0.25)`:"none"}}>
  <div style={{padding:collapsed?"20px 12px":"20px 18px",borderBottom:`1px solid ${S.border}`,transition:"padding 0.22s cubic-bezier(0.25, 0.1, 0.25, 1)"}}> <div style={{display:"flex",alignItems:"center",gap:10}}>
  <svg width={collapsed?36:38} height={collapsed?36:38} viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
  <rect width="120" height="120" rx="26" fill="#FFFFFF"/>
@@ -3634,7 +3893,7 @@ function Sidebar({view,setView,currentUser,onSwitch,sidebarOpen,setSidebarOpen})
  </div>
  </div>}
  </div>
- </div>;
+ </div></>;
 }
 
 // ─── DRILLS MANAGEMENT ──────────────────────────────────────────────────────
@@ -7044,8 +7303,11 @@ export default function App(){
  const dismissNotif=(id)=>setDismissedNotifs(p=>({...p,[id]:true}));
  const dismissAll=()=>{const nd={...dismissedNotifs};myNotifs.forEach(n=>{nd[n.id]=true;});setDismissedNotifs(nd);};
 
+ // Detect mobile with resize listener (must be before ctx)
+ const[isMobile,setIsMobile]=useState(typeof window!=='undefined'&&window.innerWidth<768);
+ useEffect(()=>{const h=()=>setIsMobile(window.innerWidth<768);window.addEventListener('resize',h);return()=>window.removeEventListener('resize',h);},[]);
 
- const ctx={jobs,setJobs,rateCards,setRateCards,currentUser,view,setView,selectedJob,setSelectedJob,dark,setDark,paidStubs,setPaidStubs,payrollRuns,setPayrollRuns,bankAccounts,setBankAccounts,trucks,setTrucks,drills,setDrills,pickups,setPickups,materialMode,setMaterialMode,invoices,setInvoices,tickets,setTickets,navFrom,setNavFrom,jobsPreFilter,setJobsPreFilter,clientSubFilter,setClientSubFilter,clientDetailOpen,setClientDetailOpen,companyConfig,setCompanyConfig,notifications:myNotifs,unreadCount};
+ const ctx={jobs,setJobs,rateCards,setRateCards,currentUser,view,setView,selectedJob,setSelectedJob,dark,setDark,paidStubs,setPaidStubs,payrollRuns,setPayrollRuns,bankAccounts,setBankAccounts,trucks,setTrucks,drills,setDrills,pickups,setPickups,materialMode,setMaterialMode,invoices,setInvoices,tickets,setTickets,navFrom,setNavFrom,jobsPreFilter,setJobsPreFilter,clientSubFilter,setClientSubFilter,clientDetailOpen,setClientDetailOpen,companyConfig,setCompanyConfig,notifications:myNotifs,unreadCount,isMobile};
 
 
  // DrillsView and TrucksView are defined at module level (above App)
@@ -7993,8 +8255,6 @@ export default function App(){
 
  // ─── MOBILE FIELD MODE ─────────────────────────────────────────────────────
 
- // Detect mobile for lineman
- const isMobile=typeof window!=='undefined'&&window.innerWidth<768;
  const isFieldRole=currentUser.role==="lineman"||currentUser.role==="foreman";
 
  return <Ctx.Provider value={ctx}>
@@ -8010,19 +8270,27 @@ export default function App(){
  @keyframes shimmer{0%{background-position:-200% 0;}100%{background-position:200% 0;}}
  @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
  @keyframes pulse{0%,100%{transform:scale(1);}50%{transform:scale(1.15);}}
- @media(max-width:767px){body{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;}}
+ @media(max-width:767px){body{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;}table{font-size:12px;}td,th{padding:8px 6px !important;}div::-webkit-scrollbar{display:none;}}
  `}</style>
- <><Sidebar view={view} setView={v=>{setNavFrom(null);setJobsPreFilter("");setClientDetailOpen(false);setView(v);}} currentUser={currentUser} onSwitch={onSwitch} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}/>
- <main style={{marginLeft:56,padding:"24px 28px",minHeight:"100vh",position:"relative"}}>
+ <><Sidebar view={view} setView={v=>{setNavFrom(null);setJobsPreFilter("");setClientDetailOpen(false);setView(v);if(isMobile)setSidebarOpen(false);}} currentUser={currentUser} onSwitch={onSwitch} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} isMobile={isMobile}/>
+ <main style={{marginLeft:isMobile?0:56,padding:isMobile?"16px 12px":"24px 28px",paddingTop:isMobile?60:24,minHeight:"100vh",position:"relative"}}>
+ {/* ── MOBILE HEADER BAR ── */}
+ {isMobile&&<div style={{position:"fixed",top:0,left:0,right:0,height:52,background:T.bgCard,borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 12px",zIndex:90,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
+  <button onClick={()=>setSidebarOpen(!sidebarOpen)} style={{width:36,height:36,borderRadius:8,background:"transparent",border:`1px solid ${T.border}`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.text} strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <div style={{fontSize:13,fontWeight:700,color:T.text,letterSpacing:1}}><span>FIBER</span><span style={{fontWeight:400,color:T.textMuted}}>LYTIC</span></div>
+  <div style={{width:36}}/>
+ </div>}
  {/* ── NOTIFICATION BELL ── */}
- <div style={{position:"fixed",top:14,right:20,zIndex:900,display:"flex",alignItems:"center",gap:8}}>
+ <div style={{position:"fixed",top:isMobile?8:14,right:isMobile?52:20,zIndex:900,display:"flex",alignItems:"center",gap:8}}>
   <button onClick={()=>{setNotifOpen(!notifOpen);if(!notifOpen)markAllRead();}} style={{position:"relative",width:36,height:36,borderRadius:8,background:notifOpen?T.accent:T.bgCard,border:`1px solid ${notifOpen?T.accent:T.border}`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s",boxShadow:"0 1px 4px rgba(0,0,0,0.12)"}}>
    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={notifOpen?"#fff":T.text} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
    {unreadCount>0&&<div style={{position:"absolute",top:-4,right:-4,minWidth:18,height:18,borderRadius:9,background:T.danger,color:"#fff",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px",boxShadow:"0 1px 3px rgba(0,0,0,0.3)",animation:unreadCount>5?"pulse 2s infinite":"none"}}>{unreadCount>99?"99+":unreadCount}</div>}
   </button>
  </div>
  {/* ── NOTIFICATION PANEL ── */}
- {notifOpen&&<div style={{position:"fixed",top:56,right:16,width:380,maxHeight:"75vh",background:T.bgCard,border:`1px solid ${T.border}`,borderRadius:10,boxShadow:"0 8px 32px rgba(0,0,0,0.18)",zIndex:901,display:"flex",flexDirection:"column",overflow:"hidden",animation:"fadeIn 0.15s ease"}}>
+ {notifOpen&&<div style={{position:"fixed",top:56,right:isMobile?8:16,width:isMobile?"calc(100vw - 16px)":380,maxHeight:"75vh",background:T.bgCard,border:`1px solid ${T.border}`,borderRadius:10,boxShadow:"0 8px 32px rgba(0,0,0,0.18)",zIndex:901,display:"flex",flexDirection:"column",overflow:"hidden",animation:"fadeIn 0.15s ease"}}>
   <div style={{padding:"14px 16px",borderBottom:`1px solid ${T.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
    <div><div style={{fontSize:14,fontWeight:700,color:T.text}}>Notifications</div><div style={{fontSize:11,color:T.textMuted}}>{myNotifs.length} alert{myNotifs.length!==1?"s":""}{myNotifs.filter(n=>n.severity==="critical").length>0&&<span style={{color:T.danger,fontWeight:600}}> · {myNotifs.filter(n=>n.severity==="critical").length} critical</span>}</div></div>
    <div style={{display:"flex",gap:6}}>{myNotifs.length>0&&<button onClick={dismissAll} style={{padding:"4px 10px",borderRadius:4,fontSize:10,fontWeight:600,background:T.bgInput,border:`1px solid ${T.border}`,color:T.textMuted,cursor:"pointer"}}>Clear all</button>}<button onClick={()=>setNotifOpen(false)} style={{width:26,height:26,borderRadius:4,background:T.bgInput,border:`1px solid ${T.border}`,color:T.textMuted,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button></div>
