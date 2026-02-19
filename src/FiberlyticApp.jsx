@@ -5,6 +5,8 @@ import useJobs from "./hooks/useJobs.js";
 import useUsers from "./hooks/useUsers.js";
 import useRateCards from "./hooks/useRateCards.js";
 import api from "./services/api.js";
+import GpsEngine from "./services/GpsEngine.js";
+import useWebSocket from "./hooks/useWebSocket.js";
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const DARK = {
@@ -293,28 +295,56 @@ class ViewErrorBoundary extends React.Component{
  }
 }
 
+// ─── GPS Pulse Animation (injected once) ────────────────────────────────────
+const GPS_PULSE_STYLE_ID = 'gps-pulse-style';
+if (typeof document !== 'undefined' && !document.getElementById(GPS_PULSE_STYLE_ID)) {
+ const style = document.createElement('style');
+ style.id = GPS_PULSE_STYLE_ID;
+ style.textContent = `
+  @keyframes gpsPulse {
+   0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.4), 0 2px 6px rgba(0,0,0,0.3); }
+   70% { box-shadow: 0 0 0 12px rgba(59,130,246,0), 0 2px 6px rgba(0,0,0,0.3); }
+   100% { box-shadow: 0 0 0 0 rgba(59,130,246,0), 0 2px 6px rgba(0,0,0,0.3); }
+  }
+ `;
+ document.head.appendChild(style);
+}
+
+/** Convert accuracy in meters to pixel radius at a given zoom/lat */
+function metersToPixels(meters, lat, zoom) {
+ const px = meters / (40075016 * Math.cos(lat * Math.PI / 180) / (512 * Math.pow(2, zoom)));
+ return Math.max(6, Math.min(200, px));
+}
+
 // ─── Live Mode Map Component ────────────────────────────────────────────────
 function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, currentUser }) {
  const mapRef = useRef(null);
  const mapInstance = useRef(null);
  const markersRef = useRef([]);
  const userMarkerRef = useRef(null);
- const gpsWatchRef = useRef(null);
+ const crewMarkersRef = useRef(new Map());
+ const gpsEngineRef = useRef(null);
+ const breadcrumbsRef = useRef([]);
  const [userPos, setUserPos] = useState(null);
  const [gpsAccuracy, setGpsAccuracy] = useState(null);
+ const [gpsQuality, setGpsQuality] = useState(null);
+ const [gpsHeading, setGpsHeading] = useState(null);
+ const [gpsStats, setGpsStats] = useState({ totalFixes: 0, rejectedFixes: 0 });
  const [gpsError, setGpsError] = useState(null);
  const [mapReady, setMapReady] = useState(false);
 
+ // WebSocket
+ const { connected, crewLocations, onlineUsers, sendLocation, startSession, endSession } = useWebSocket();
+
  const poles = (job.routePoles || []).filter(p => p && p.lat && p.lng);
  const spans = liveSession?.spans || [];
- const GPS_RADIUS_M = 50; // Proximity radius for pole selection
+ const GPS_RADIUS_M = 50;
 
  // Initialize map
  useEffect(() => {
   if (!mapRef.current || poles.length === 0) return;
   if (mapInstance.current) return;
 
-  // Calculate bounds from poles
   const lngs = poles.map(p => p.lng).filter(Boolean);
   const lats = poles.map(p => p.lat).filter(Boolean);
   if (lngs.length === 0) return;
@@ -330,7 +360,6 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
   map.addControl(new maplibregl.NavigationControl(), "top-right");
 
   map.on("load", () => {
-   // Add route line source
    const routeCoords = poles.filter(p => p.lat && p.lng).map(p => [p.lng, p.lat]);
    map.addSource("route", { type: "geojson", data: { type: "Feature", geometry: { type: "LineString", coordinates: routeCoords }, properties: {} } });
    map.addLayer({ id: "route-bg", type: "line", source: "route", paint: { "line-color": "#555555", "line-width": 3, "line-dasharray": [2, 2] } });
@@ -339,13 +368,16 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
    map.addSource("completed-spans", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
    map.addLayer({ id: "completed-spans-layer", type: "line", source: "completed-spans", paint: { "line-width": 5 } });
 
-   // GPS accuracy circle
-   map.addSource("gps-accuracy", { type: "geojson", data: { type: "Feature", geometry: { type: "Point", coordinates: [0, 0] }, properties: {} } });
-   map.addLayer({ id: "gps-accuracy-circle", type: "circle", source: "gps-accuracy", paint: { "circle-radius": 20, "circle-color": "rgba(59, 130, 246, 0.1)", "circle-stroke-color": "rgba(59, 130, 246, 0.3)", "circle-stroke-width": 1 } });
+   // GPS accuracy circle (dynamic radius)
+   map.addSource("gps-accuracy", { type: "geojson", data: { type: "Feature", geometry: { type: "Point", coordinates: [0, 0] }, properties: { radius: 20 } } });
+   map.addLayer({ id: "gps-accuracy-circle", type: "circle", source: "gps-accuracy", paint: { "circle-radius": ["get", "radius"], "circle-color": "rgba(59, 130, 246, 0.08)", "circle-stroke-color": "rgba(59, 130, 246, 0.25)", "circle-stroke-width": 1 } });
+
+   // Breadcrumbs trail
+   map.addSource("breadcrumbs", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+   map.addLayer({ id: "breadcrumbs-layer", type: "circle", source: "breadcrumbs", paint: { "circle-radius": 3, "circle-color": "#3B82F6", "circle-opacity": ["get", "opacity"] } });
 
    setMapReady(true);
 
-   // Fit to bounds
    const bounds = new maplibregl.LngLatBounds();
    routeCoords.forEach(c => bounds.extend(c));
    map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
@@ -355,10 +387,45 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
   return () => { map.remove(); mapInstance.current = null; };
  }, [poles.length]);
 
+ // GpsEngine — replaces raw watchPosition
+ useEffect(() => {
+  const engine = new GpsEngine();
+  gpsEngineRef.current = engine;
+
+  engine.onUpdate((data) => {
+   if (data.error) { setGpsError(data.error); return; }
+   setGpsError(null);
+   setUserPos({ lat: data.lat, lng: data.lng });
+   setGpsAccuracy(data.accuracy);
+   setGpsQuality(data.quality);
+   setGpsHeading(data.heading);
+   setGpsStats(engine.getStats());
+
+   // Send to WebSocket
+   sendLocation(data);
+
+   // Breadcrumbs (keep last 50)
+   breadcrumbsRef.current = [...breadcrumbsRef.current, { lat: data.lat, lng: data.lng, ts: data.timestamp }].slice(-50);
+
+   // Update breadcrumbs source
+   if (mapInstance.current && mapInstance.current.getSource("breadcrumbs")) {
+    const total = breadcrumbsRef.current.length;
+    const features = breadcrumbsRef.current.map((b, i) => ({
+     type: "Feature",
+     geometry: { type: "Point", coordinates: [b.lng, b.lat] },
+     properties: { opacity: 0.2 + 0.8 * (i / Math.max(total - 1, 1)) }
+    }));
+    mapInstance.current.getSource("breadcrumbs").setData({ type: "FeatureCollection", features });
+   }
+  });
+
+  engine.start();
+  return () => engine.stop();
+ }, [sendLocation]);
+
  // Update pole markers when session changes
  useEffect(() => {
   if (!mapInstance.current || !mapReady) return;
-  // Clear old markers
   markersRef.current.forEach(m => m.remove());
   markersRef.current = [];
 
@@ -371,19 +438,17 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
    const nextIdx = liveSession?.currentPole ? poles.findIndex(p => p.id === liveSession.currentPole) + 1 : -1;
    const isNext = liveSession && nextIdx === pi && !isCompleted;
 
-   // Determine color
-   let color = "#6B7280"; // gray - pending
+   let color = "#6B7280";
    let size = 14;
-   if (isCurrent) { color = "#4ADE80"; size = 20; } // green - current
-   else if (isCompleted) { color = "#22C55E"; size = 16; } // green - done
-   else if (isNext) { color = "#FACC15"; size = 18; } // yellow - next
+   if (isCurrent) { color = "#4ADE80"; size = 20; }
+   else if (isCompleted) { color = "#22C55E"; size = 16; }
+   else if (isNext) { color = "#FACC15"; size = 18; }
 
    const el = document.createElement("div");
    el.style.cssText = `width:${size}px;height:${size}px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4);cursor:pointer;transition:all 0.3s;`;
    if (isCurrent) el.style.cssText += `box-shadow:0 0 0 8px rgba(74,222,128,0.25),0 2px 8px rgba(0,0,0,0.4);`;
    if (isNext) el.style.cssText += `box-shadow:0 0 0 6px rgba(250,204,21,0.2),0 2px 8px rgba(0,0,0,0.4);`;
 
-   // Label
    const label = document.createElement("div");
    label.style.cssText = `position:absolute;top:${size+4}px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:10px;font-weight:700;color:#fff;background:rgba(0,0,0,0.7);padding:1px 5px;border-radius:3px;pointer-events:none;`;
    label.textContent = pole.label || `P${pi + 1}`;
@@ -409,47 +474,109 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
   const src = mapInstance.current.getSource("completed-spans");
   if (src) src.setData({ type: "FeatureCollection", features });
 
-  // Update paint to use data-driven color
   if (mapInstance.current.getLayer("completed-spans-layer")) {
    mapInstance.current.setPaintProperty("completed-spans-layer", "line-color", ["get", "color"]);
   }
  }, [mapReady, spans.length]);
 
- // GPS tracking
- useEffect(() => {
-  if (!navigator.geolocation) { setGpsError("GPS not available"); return; }
-  const id = navigator.geolocation.watchPosition(
-   (pos) => {
-    setUserPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-    setGpsAccuracy(pos.coords.accuracy);
-    setGpsError(null);
-   },
-   (err) => setGpsError(err.message),
-   { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
-  );
-  gpsWatchRef.current = id;
-  return () => navigator.geolocation.clearWatch(id);
- }, []);
-
- // Update user position marker on map
+ // Update user position marker + accuracy circle + heading arrow
  useEffect(() => {
   if (!mapInstance.current || !mapReady || !userPos) return;
+
   if (!userMarkerRef.current) {
-   const el = document.createElement("div");
-   el.style.cssText = "width:16px;height:16px;border-radius:50%;background:#3B82F6;border:3px solid #fff;box-shadow:0 0 0 6px rgba(59,130,246,0.2),0 2px 6px rgba(0,0,0,0.3);";
-   userMarkerRef.current = new maplibregl.Marker({ element: el }).setLngLat([userPos.lng, userPos.lat]).addTo(mapInstance.current);
+   // Create marker with heading arrow
+   const container = document.createElement("div");
+   container.style.cssText = "position:relative;width:22px;height:22px;";
+
+   // Heading arrow (triangle)
+   const arrow = document.createElement("div");
+   arrow.className = "gps-arrow";
+   arrow.style.cssText = "position:absolute;top:-10px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:10px solid #3B82F6;transition:transform 0.3s ease;";
+   container.appendChild(arrow);
+
+   // Blue dot
+   const dot = document.createElement("div");
+   dot.style.cssText = "width:16px;height:16px;border-radius:50%;background:#3B82F6;border:3px solid #fff;position:absolute;top:3px;left:3px;animation:gpsPulse 2s infinite;";
+   container.appendChild(dot);
+
+   userMarkerRef.current = new maplibregl.Marker({ element: container }).setLngLat([userPos.lng, userPos.lat]).addTo(mapInstance.current);
   } else {
    userMarkerRef.current.setLngLat([userPos.lng, userPos.lat]);
   }
-  // Update accuracy circle
+
+  // Rotate heading arrow
+  if (gpsHeading != null) {
+   const arrowEl = userMarkerRef.current.getElement().querySelector('.gps-arrow');
+   if (arrowEl) arrowEl.style.transform = `translateX(-50%) rotate(${gpsHeading}deg)`;
+  }
+
+  // Update accuracy circle with dynamic radius
   const accSrc = mapInstance.current.getSource("gps-accuracy");
-  if (accSrc) accSrc.setData({ type: "Feature", geometry: { type: "Point", coordinates: [userPos.lng, userPos.lat] }, properties: {} });
- }, [mapReady, userPos]);
+  if (accSrc && gpsAccuracy) {
+   const zoom = mapInstance.current.getZoom();
+   const radiusPx = metersToPixels(gpsAccuracy, userPos.lat, zoom);
+   accSrc.setData({ type: "Feature", geometry: { type: "Point", coordinates: [userPos.lng, userPos.lat] }, properties: { radius: radiusPx } });
+  }
+ }, [mapReady, userPos, gpsHeading, gpsAccuracy]);
+
+ // Re-compute accuracy circle radius on zoom change
+ useEffect(() => {
+  if (!mapInstance.current || !mapReady) return;
+  const onZoom = () => {
+   if (!userPos || !gpsAccuracy) return;
+   const accSrc = mapInstance.current.getSource("gps-accuracy");
+   if (accSrc) {
+    const zoom = mapInstance.current.getZoom();
+    const radiusPx = metersToPixels(gpsAccuracy, userPos.lat, zoom);
+    accSrc.setData({ type: "Feature", geometry: { type: "Point", coordinates: [userPos.lng, userPos.lat] }, properties: { radius: radiusPx } });
+   }
+  };
+  mapInstance.current.on("zoom", onZoom);
+  return () => { if (mapInstance.current) mapInstance.current.off("zoom", onZoom); };
+ }, [mapReady, userPos, gpsAccuracy]);
+
+ // Crew member markers (from WebSocket)
+ useEffect(() => {
+  if (!mapInstance.current || !mapReady) return;
+
+  // Remove stale crew markers
+  for (const [uid, marker] of crewMarkersRef.current) {
+   if (!crewLocations.has(uid)) {
+    marker.remove();
+    crewMarkersRef.current.delete(uid);
+   }
+  }
+
+  // Update or create crew markers
+  for (const [uid, loc] of crewLocations) {
+   if (crewMarkersRef.current.has(uid)) {
+    crewMarkersRef.current.get(uid).setLngLat([loc.lng, loc.lat]);
+    // Update label if needed
+    const labelEl = crewMarkersRef.current.get(uid).getElement().querySelector('.crew-label');
+    if (labelEl && loc.email) labelEl.textContent = loc.email.split('@')[0];
+   } else {
+    const el = document.createElement("div");
+    el.style.cssText = "position:relative;width:14px;height:14px;";
+
+    const dot = document.createElement("div");
+    dot.style.cssText = "width:14px;height:14px;border-radius:50%;background:#FB923C;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);";
+    el.appendChild(dot);
+
+    const label = document.createElement("div");
+    label.className = "crew-label";
+    label.style.cssText = "position:absolute;top:18px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:9px;font-weight:700;color:#fff;background:rgba(251,146,60,0.9);padding:1px 5px;border-radius:3px;pointer-events:none;";
+    label.textContent = loc.email ? loc.email.split('@')[0] : 'crew';
+    el.appendChild(label);
+
+    const marker = new maplibregl.Marker({ element: el }).setLngLat([loc.lng, loc.lat]).addTo(mapInstance.current);
+    crewMarkersRef.current.set(uid, marker);
+   }
+  }
+ }, [mapReady, crewLocations]);
 
  // Handle pole click
  const handlePoleClick = useCallback((pole, pi) => {
   if (!liveSession) return;
-  // Set start pole
   if (!liveSession.startPole) {
    setLiveSession({ ...liveSession, startPole: pole.id, currentPole: pole.id });
    if (mapInstance.current) mapInstance.current.flyTo({ center: [pole.lng, pole.lat], zoom: 16, duration: 800 });
@@ -465,17 +592,26 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
    const fromPole = liveSession.currentPole;
    const fromIdx = poles.findIndex(p => p.id === fromPole);
    const dist = poles[fromIdx]?.distToNext || 0;
+
+   // GPS verification for this span
+   let gpsVerify = null;
+   if (userPos && gpsAccuracy) {
+    const poleDist = Math.sqrt(Math.pow((userPos.lat - pole.lat) * 111320, 2) + Math.pow((userPos.lng - pole.lng) * 111320 * Math.cos(pole.lat * Math.PI / 180), 2));
+    gpsVerify = { distance: Math.round(poleDist), accuracy: Math.round(gpsAccuracy), verified: poleDist <= GPS_RADIUS_M };
+   }
+
    setLiveSession({
     ...liveSession,
     currentPole: pole.id,
-    spans: [...liveSession.spans, { fromPole, toPole: pole.id, workTypes: [liveSession.workType], footage: dist, anchor: false, coil: false, snowshoe: false, poleTransfer: false, fiberSeq: "" }]
+    spans: [...liveSession.spans, { fromPole, toPole: pole.id, workTypes: [liveSession.workType], footage: dist, anchor: false, coil: false, snowshoe: false, poleTransfer: false, fiberSeq: "", gpsVerify }]
    });
    if (mapInstance.current) mapInstance.current.flyTo({ center: [pole.lng, pole.lat], zoom: 16, duration: 600 });
   }
- }, [liveSession, poles, spans]);
+ }, [liveSession, poles, spans, userPos, gpsAccuracy]);
 
  const totalFt = spans.reduce((s, sp) => s + sp.footage, 0);
  const progress = poles.length > 1 ? Math.round((spans.length / (poles.length - 1)) * 100) : 0;
+ const crewOnline = crewLocations.size;
 
  return (
   <div>
@@ -487,7 +623,21 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
       <div style={{ fontSize: 11, color: T.textMuted }}>{poles.length} poles · {poles.reduce((s, p) => s + (p.distToNext || 0), 0).toLocaleString()} ft total</div>
      </div>
      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      {gpsAccuracy && <span style={{ fontSize: 10, color: gpsAccuracy < 15 ? T.success : gpsAccuracy < 30 ? T.warning : T.danger, fontWeight: 600 }}>GPS ±{Math.round(gpsAccuracy)}m</span>}
+      {/* GPS Quality Badge */}
+      {gpsQuality && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 6, background: gpsQuality.color + "18", border: `1px solid ${gpsQuality.color}44` }}>
+       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={gpsQuality.color} strokeWidth="2.5"><path d="M12 2L4.5 20.3l.7.7L12 18l6.8 3 .7-.7z"/></svg>
+       <span style={{ fontSize: 10, fontWeight: 700, color: gpsQuality.color }}>±{Math.round(gpsAccuracy)}m</span>
+       <span style={{ fontSize: 9, fontWeight: 600, color: gpsQuality.color, opacity: 0.8 }}>{gpsQuality.label}</span>
+      </div>}
+      {/* Crew online indicator */}
+      {crewOnline > 0 && <div style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: T.textMuted }}>
+       <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#FB923C", display: "inline-block" }} />
+       {crewOnline} crew
+      </div>}
+      {/* Connection status */}
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: connected ? T.success : T.danger, display: "inline-block" }} title={connected ? "Connected" : "Disconnected"} />
+      {/* Fix stats */}
+      {gpsStats.totalFixes > 0 && <span style={{ fontSize: 9, color: T.textDim }}>{gpsStats.totalFixes - gpsStats.rejectedFixes}/{gpsStats.totalFixes}</span>}
       {!liveSession?<Btn onClick={()=>setLiveSession({startPole:null,currentPole:null,spans:[],workType:"S+F"})} style={{background:T.success}}>Start Build</Btn>:<Badge label="● LIVE" color={T.success} bg={T.successSoft}/>}
      </div>
     </div>
@@ -536,6 +686,7 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
         <div style={{ flex: 1, height: 2, background: T.success }} />
         <span style={{ fontSize: 10, fontWeight: 700, color: T.success, fontFamily: "monospace" }}>{completedSpan.footage} ft</span>
         <span style={{ fontSize: 9, fontWeight: 600, color: { "S+F": "#3B82F6", Overlash: "#22C55E", Fiber: "#C084FC", Strand: T.accent }[completedSpan.workTypes?.[0]] || T.textDim }}>{completedSpan.workTypes?.[0] || "S+F"}</span>
+        {completedSpan.gpsVerify && <span style={{ fontSize: 8, fontWeight: 700, color: completedSpan.gpsVerify.verified ? T.success : T.warning }}>{completedSpan.gpsVerify.verified ? "GPS ✓" : `${completedSpan.gpsVerify.distance}m`}</span>}
         <div style={{ flex: 1, height: 2, background: T.success }} />
        </div>}
        <div onClick={() => handlePoleClick(pole, pi)} style={{ padding: "8px 14px", display: "flex", alignItems: "center", gap: 10, cursor: liveSession ? "pointer" : "default", background: isCurrent ? T.success + "12" : isCompleted ? T.success + "06" : "transparent", borderLeft: `4px solid ${borderColor}` }}>
