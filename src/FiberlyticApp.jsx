@@ -3,7 +3,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import useJobs from "./hooks/useJobs.js";
 import useUsers from "./hooks/useUsers.js";
-import useRateCards from "./hooks/useRateCards.js";
+import useRateCards, { saveLocalRateCard, markGroupDeleted, markClientDeleted } from "./hooks/useRateCards.js";
 import api from "./services/api.js";
 import GpsEngine from "./services/GpsEngine.js";
 import useWebSocket from "./hooks/useWebSocket.js";
@@ -106,7 +106,7 @@ function seedDocs(jobId,st,compDate,feederId,dept){
  return docs;
 }
 
-const STATUS_CFG={Unassigned:{c:T.textDim,bg:"rgba(71,85,105,0.15)"},Assigned:{c:T.cyan,bg:T.cyanSoft},"Pending Redlines":{c:T.purple,bg:T.purpleSoft},"Under Client Review":{c:T.warning,bg:T.warningSoft},Rejected:{c:T.danger,bg:T.dangerSoft},"Ready to Invoice":{c:"#FACC15",bg:"rgba(250,204,21,0.12)"},Billed:{c:T.success,bg:T.successSoft}};
+const STATUS_CFG={Unassigned:{c:T.danger,bg:T.dangerSoft},Assigned:{c:T.success,bg:T.successSoft},"Pending Redlines":{c:T.textDim,bg:"rgba(71,85,105,0.15)"},"Under Client Review":{c:T.warning,bg:T.warningSoft},Rejected:{c:T.danger,bg:T.dangerSoft},"Ready to Invoice":{c:"#FACC15",bg:"rgba(250,204,21,0.12)"},Billed:{c:T.success,bg:T.successSoft}};
 const REDLINE_CFG={"Not Uploaded":{c:T.textDim,bg:"rgba(71,85,105,0.15)"},Uploaded:{c:T.warning,bg:T.warningSoft},"Under Review":{c:T.purple,bg:T.purpleSoft},Approved:{c:T.success,bg:T.successSoft},Rejected:{c:T.danger,bg:T.dangerSoft}};
 const FIN_CFG={Calculated:{c:T.success,bg:T.successSoft},"Missing Rate":{c:T.danger,bg:T.dangerSoft},"No Production":{c:T.textDim,bg:"rgba(71,85,105,0.15)"},"Mapping Needed":{c:T.warning,bg:T.warningSoft}};
 
@@ -149,8 +149,15 @@ function calcJob(job,rc){
  const src=job.confirmedTotals||job.production;
  const isConfirmed=!!job.confirmedTotals;
  const isBilled=!!job.billedAt;
+ // Smart rate card lookup: exact → case-insensitive → customer+region only
  const gk=`${job.client}|${job.customer}|${job.region}`;
- const grp=rc[gk];
+ let grp=rc[gk];
+ if(!grp){
+  const jCust=(job.customer||"").toUpperCase(),jReg=(job.region||"").toUpperCase();
+  grp=Object.values(rc).find(g=>
+   (g.customer||"").toUpperCase()===jCust&&(g.region||"").toUpperCase()===jReg
+  );
+ }
  if(!grp)return{status:"Missing Rate",error:`No rate card group: ${gk}`,items:[],totals:null};
  const ngP=grp.profiles["NextGen Default"];
  const lmUser=USERS.find(u=>u.id===job.assignedLineman);
@@ -340,52 +347,66 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
  const spans = liveSession?.spans || [];
  const GPS_RADIUS_M = 50;
 
- // Initialize map
- useEffect(() => {
-  if (!mapRef.current || poles.length === 0) return;
-  if (mapInstance.current) return;
-
-  const lngs = poles.map(p => p.lng).filter(Boolean);
-  const lats = poles.map(p => p.lat).filter(Boolean);
-  if (lngs.length === 0) return;
+ // Initialize map — works with or without poles, falls back to GPS position
+ const mapInitAttempted = useRef(false);
+ const initMap = useCallback((centerLng, centerLat) => {
+  if (!mapRef.current || mapInstance.current) return;
+  mapInitAttempted.current = true;
 
   const map = new maplibregl.Map({
    container: mapRef.current,
    style: { version: 8, sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256, attribution: "&copy; OpenStreetMap" } }, layers: [{ id: "osm", type: "raster", source: "osm" }] },
-   center: [lngs.reduce((a, b) => a + b, 0) / lngs.length, lats.reduce((a, b) => a + b, 0) / lats.length],
-   zoom: 14,
+   center: [centerLng, centerLat],
+   zoom: 15,
    attributionControl: false,
   });
 
   map.addControl(new maplibregl.NavigationControl(), "top-right");
+  map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true, showUserHeading: true }), "top-right");
 
   map.on("load", () => {
    const routeCoords = poles.filter(p => p.lat && p.lng).map(p => [p.lng, p.lat]);
-   map.addSource("route", { type: "geojson", data: { type: "Feature", geometry: { type: "LineString", coordinates: routeCoords }, properties: {} } });
+   map.addSource("route", { type: "geojson", data: { type: "Feature", geometry: { type: "LineString", coordinates: routeCoords.length > 0 ? routeCoords : [[centerLng, centerLat]] }, properties: {} } });
    map.addLayer({ id: "route-bg", type: "line", source: "route", paint: { "line-color": "#555555", "line-width": 3, "line-dasharray": [2, 2] } });
 
-   // Completed spans layer
    map.addSource("completed-spans", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
    map.addLayer({ id: "completed-spans-layer", type: "line", source: "completed-spans", paint: { "line-width": 5 } });
 
-   // GPS accuracy circle (dynamic radius)
    map.addSource("gps-accuracy", { type: "geojson", data: { type: "Feature", geometry: { type: "Point", coordinates: [0, 0] }, properties: { radius: 20 } } });
    map.addLayer({ id: "gps-accuracy-circle", type: "circle", source: "gps-accuracy", paint: { "circle-radius": ["get", "radius"], "circle-color": "rgba(59, 130, 246, 0.08)", "circle-stroke-color": "rgba(59, 130, 246, 0.25)", "circle-stroke-width": 1 } });
 
-   // Breadcrumbs trail
    map.addSource("breadcrumbs", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
    map.addLayer({ id: "breadcrumbs-layer", type: "circle", source: "breadcrumbs", paint: { "circle-radius": 3, "circle-color": "#3B82F6", "circle-opacity": ["get", "opacity"] } });
 
    setMapReady(true);
 
-   const bounds = new maplibregl.LngLatBounds();
-   routeCoords.forEach(c => bounds.extend(c));
-   map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+   if (routeCoords.length > 1) {
+    const bounds = new maplibregl.LngLatBounds();
+    routeCoords.forEach(c => bounds.extend(c));
+    map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+   }
   });
 
   mapInstance.current = map;
-  return () => { map.remove(); mapInstance.current = null; };
- }, [poles.length]);
+ }, [poles]);
+
+ // Try to init map with poles first, or wait for GPS
+ useEffect(() => {
+  if (!mapRef.current || mapInstance.current) return;
+  const lngs = poles.map(p => p.lng).filter(Boolean);
+  const lats = poles.map(p => p.lat).filter(Boolean);
+  if (lngs.length > 0) {
+   initMap(lngs.reduce((a, b) => a + b, 0) / lngs.length, lats.reduce((a, b) => a + b, 0) / lats.length);
+  } else if (!mapInitAttempted.current) {
+   // No poles — init map on GPS position when available
+   navigator.geolocation?.getCurrentPosition(
+    pos => { if (!mapInstance.current) initMap(pos.coords.longitude, pos.coords.latitude); },
+    () => { if (!mapInstance.current) initMap(-86.87, 33.92); }, // fallback Alabama
+    { enableHighAccuracy: true, timeout: 5000 }
+   );
+  }
+  return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; } };
+ }, [poles.length, initMap]);
 
  // GpsEngine — replaces raw watchPosition
  useEffect(() => {
@@ -516,6 +537,11 @@ function LiveModeMap({ job, liveSession, setLiveSession, onSubmit, pf, setPf, cu
    const zoom = mapInstance.current.getZoom();
    const radiusPx = metersToPixels(gpsAccuracy, userPos.lat, zoom);
    accSrc.setData({ type: "Feature", geometry: { type: "Point", coordinates: [userPos.lng, userPos.lat] }, properties: { radius: radiusPx } });
+  }
+ // Auto-center on user's first GPS fix
+  if (userPos && !userMarkerRef.current._centered) {
+   userMarkerRef.current._centered = true;
+   mapInstance.current.flyTo({ center: [userPos.lng, userPos.lat], zoom: 16, duration: 1500 });
   }
  }, [mapReady, userPos, gpsHeading, gpsAccuracy]);
 
@@ -748,6 +774,9 @@ function compBadge(dateStr){
 // ─── Context ─────────────────────────────────────────────────────────────────
 const Ctx=createContext();const useApp=()=>useContext(Ctx);
 
+// ─── Trash Icon ──────────────────────────────────────────────────────────────
+const Trash=({size=14,color="currentColor"})=><svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>;
+
 // ─── UI Primitives ───────────────────────────────────────────────────────────
 const $=n=>n==null?"—":"$"+n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const pc=n=>n==null?"—":n.toFixed(1)+"%";
@@ -788,19 +817,30 @@ function Modal({open,onClose,title,children,width=560}){
  </div>
  </div>;
 }
-function DT({columns,data,onRowClick,expandedId,renderExpanded}){
+function DT({columns,data,onRowClick,expandedId,renderExpanded,mobileCardRender,fixedLayout}){
  const{isMobile:_m}=useApp();
+ // Mobile: card-based layout
+ if(_m&&mobileCardRender){
+  return <div style={{display:"flex",flexDirection:"column",gap:10}}>
+   {data.map((row,ri)=>
+    <div key={ri} onClick={()=>onRowClick?.(row)} style={{cursor:onRowClick?"pointer":"default"}}>
+     {mobileCardRender(row)}
+    </div>
+   )}
+   {data.length===0&&<div style={{padding:40,textAlign:"center",color:T.textDim,background:T.bgCard,borderRadius:8,border:`1px solid ${T.border}`}}>No jobs found</div>}
+  </div>;
+ }
  const mobileHide=["olt","feederId","compDate","lm","sr","fin","feet"];
  const visCols=_m?columns.filter(c=>!mobileHide.includes(c.key)):columns;
  return <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",borderRadius:4,border:`1px solid ${T.border}`}}>
- <table style={{width:"100%",borderCollapse:"collapse",fontSize:_m?12:13}}>
+ <table style={{width:"100%",borderCollapse:"collapse",fontSize:_m?12:13,...(fixedLayout?{tableLayout:"fixed"}:{})}}>
  <thead><tr style={{background:T.bgInput}}>
- {visCols.map(c=><th key={c.key} style={{textAlign:"left",padding:_m?"8px 8px":"10px 14px",color:T.textMuted,fontWeight:500,fontSize:_m?10:11,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${T.border}`,whiteSpace:"nowrap"}}>{c.label}</th>)}
+ {visCols.map(c=><th key={c.key} style={{textAlign:"left",padding:"10px 14px",color:T.textMuted,fontWeight:500,fontSize:11,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${T.border}`,whiteSpace:"nowrap",...(c.thStyle||{})}}>{c.label}</th>)}
  </tr></thead>
  <tbody>
  {data.map((row,ri)=>{const isExp=expandedId&&expandedId===row.id;return <React.Fragment key={ri}>
- <tr onClick={()=>onRowClick?.(row)} style={{cursor:onRowClick?"pointer":"default",borderBottom:isExp?"none":`1px solid ${T.border}`,transition:"background 0.1s",background:isExp?T.accentSoft:"transparent"}} onMouseEnter={e=>{if(!_m&&!isExp)e.currentTarget.style.background=T.bgCardHover;}} onMouseLeave={e=>{if(!_m&&!isExp)e.currentTarget.style.background=isExp?T.accentSoft:"transparent";}}>
- {visCols.map(c=><td key={c.key} style={{padding:_m?"8px 8px":"10px 14px",color:T.text,whiteSpace:"nowrap"}}>{c.render?c.render(row):row[c.key]}</td>)}
+ <tr onClick={()=>onRowClick?.(row)} style={{cursor:onRowClick?"pointer":"default",borderBottom:isExp?"none":`1px solid ${T.border}`,transition:"background 0.1s",background:isExp?T.accentSoft:"transparent"}} onMouseEnter={e=>{if(!isExp)e.currentTarget.style.background=T.bgCardHover;}} onMouseLeave={e=>{e.currentTarget.style.background=isExp?T.accentSoft:"transparent";}}>
+ {visCols.map(c=><td key={c.key} style={{padding:"10px 14px",color:T.text,whiteSpace:"nowrap",...(c.tdStyle||{})}}>{c.render?c.render(row):row[c.key]}</td>)}
  </tr>
  {isExp&&renderExpanded&&<tr><td colSpan={visCols.length} style={{padding:0,borderBottom:`1px solid ${T.border}`}}>{renderExpanded(row)}</td></tr>}
  </React.Fragment>;})}
@@ -809,7 +849,7 @@ function DT({columns,data,onRowClick,expandedId,renderExpanded}){
  </table>
  </div>;
 }
-function TabBar({tabs,active,onChange}){const{isMobile:_m}=useApp();return <div style={{display:"flex",gap:2,background:T.bgInput,borderRadius:4,padding:3,marginBottom:_m?12:20,overflowX:_m?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",msOverflowStyle:"none"}}>{tabs.map(t=><button key={t.key} onClick={()=>onChange(t.key)} style={{flex:_m?"0 0 auto":1,padding:_m?"7px 12px":"8px 14px",fontSize:_m?11:12,fontWeight:600,borderRadius:3,border:"none",cursor:"pointer",background:active===t.key?T.bgCard:"transparent",color:active===t.key?T.text:T.textMuted,transition:"all 0.15s",boxShadow:active===t.key?`0 1px 2px rgba(0,0,0,0.04)`:"none",whiteSpace:"nowrap"}}>{t.label}</button>)}</div>;}
+function TabBar({tabs,active,onChange}){const{isMobile:_m}=useApp();return <div style={{display:"flex",gap:_m?0:2,background:T.bgInput,borderRadius:_m?8:4,padding:_m?4:3,marginBottom:_m?14:20,overflowX:_m?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",msOverflowStyle:"none"}}>{tabs.map(t=><button key={t.key} onClick={()=>onChange(t.key)} style={{flex:_m?"1 0 auto":1,padding:_m?"10px 14px":"8px 14px",fontSize:_m?12:12,fontWeight:active===t.key?700:600,borderRadius:_m?6:3,border:"none",cursor:"pointer",background:active===t.key?T.bgCard:"transparent",color:active===t.key?T.accent:T.textMuted,transition:"all 0.15s",boxShadow:active===t.key?`0 1px 3px rgba(0,0,0,0.08)`:"none",whiteSpace:"nowrap",minHeight:_m?40:undefined}}>{t.label}</button>)}</div>;}
 function SC({label,value,color,icon,sub}){const{isMobile:_m}=useApp();return <Card style={{flex:1,minWidth:_m?100:155,padding:_m?12:16,borderLeft:`3px solid ${color||T.accent}`}}><div><div style={{fontSize:_m?18:22,fontWeight:700,color:T.text,lineHeight:1,letterSpacing:-0.3}}>{value}</div><div style={{fontSize:_m?9:10,color:T.textMuted,marginTop:_m?3:4,fontWeight:500,textTransform:"uppercase",letterSpacing:0.3}}>{label}</div>{sub&&<div style={{fontSize:_m?9:10,color:T.textDim,marginTop:2}}>{sub}</div>}</div></Card>;}
 const FR=(l,v)=><div style={{display:"flex",flexWrap:"wrap",borderBottom:`1px solid ${T.border}22`,padding:"8px 0"}}><span style={{width:130,minWidth:100,fontSize:12,color:T.textMuted,fontWeight:600}}>{l}</span><span style={{fontSize:13,color:T.text,fontWeight:500,flex:1,minWidth:0}}>{v||"—"}</span></div>;
 
@@ -889,7 +929,7 @@ function Dashboard(){
  {[{k:"week",l:"Week"},{k:"month",l:"Month"},{k:"year",l:"Year"},{k:"all",l:_m?"All":"All Time"}].map(p=>
  <button key={p.k} onClick={()=>setPeriod(p.k)} style={{
  padding:_m?"7px 8px":"7px 12px",border:"none",fontSize:_m?10:11,fontWeight:700,cursor:"pointer",transition:"all 0.15s",flex:_m?1:undefined,
- background:period===p.k?T.accent:"transparent",color:period===p.k?"#fff":T.textMuted,
+ background:period===p.k?T.accent:"transparent",color:period===p.k?T.bg:T.textMuted,
  }}>{p.l}</button>
  )}
  </div>
@@ -934,12 +974,12 @@ function Dashboard(){
  })()}
  {/* ── FOOTAGE GOAL TRACKER — the CEO dopamine hit ── */}
  {(()=>{
- const goalMap={week:75000,month:300000,year:3600000,all:10000000};
- const goal=goalMap[period]||200000;
- const goalPct=Math.min((d.tFeet/goal)*100,100);
- const goalLabel=goal>=1000000?`${(goal/1000000).toFixed(1)}M`:`${(goal/1000).toFixed(0)}k`;
+ const goalMap={week:0,month:0,year:0,all:0};
+ const goal=goalMap[period]||0;
+ const goalPct=goal>0?Math.min((d.tFeet/goal)*100,100):0;
+ const goalLabel=goal>0?(goal>=1000000?`${(goal/1000000).toFixed(1)}M`:`${(goal/1000).toFixed(0)}k`):"—";
  const feetLabel=d.tFeet>=1000000?`${(d.tFeet/1000000).toFixed(2)}M`:d.tFeet>=1000?`${(d.tFeet/1000).toFixed(1)}k`:String(d.tFeet);
- const hit=d.tFeet>=goal;
+ const hit=goal>0&&d.tFeet>=goal;
  const revPerFt=d.tFeet>0?(d.tRev/d.tFeet):0;
  const profPerFt=d.tFeet>0?(d.tProfit/d.tFeet):0;
  return <Card style={{marginBottom:_m?12:16,padding:0,overflow:"hidden",borderColor:hit?T.success+"55":T.accent+"33"}}>
@@ -949,11 +989,11 @@ function Dashboard(){
  <div style={{fontSize:10,fontWeight:700,color:T.textMuted,textTransform:"uppercase",letterSpacing:1.2,marginBottom:6}}>{periodLabel} Footage Goal</div>
  <div style={{display:"flex",alignItems:"baseline",gap:_m?4:8}}>
  <span style={{fontSize:_m?30:44,fontWeight:600,color:hit?T.success:T.text,lineHeight:1,letterSpacing:-2}}>{feetLabel}</span>
- <span style={{fontSize:_m?12:16,fontWeight:600,color:T.textMuted}}>/ {goalLabel} ft</span>
+ <span style={{fontSize:_m?12:16,fontWeight:600,color:T.textMuted}}>{goal>0?`/ ${goalLabel} ft`:"ft total"}</span>
  </div>
  {hit
  ?<div style={{fontSize:_m?11:13,fontWeight:700,color:T.success,marginTop:6,display:"flex",alignItems:"center",gap:5}}>Target Exceeded {((d.tFeet/goal)*100).toFixed(0)}%</div>
- :<div style={{fontSize:_m?11:12,color:T.textMuted,marginTop:6}}>{(goal-d.tFeet).toLocaleString()} ft remaining · {(goalPct).toFixed(1)}%</div>
+ :<div style={{fontSize:_m?11:12,color:T.textMuted,marginTop:6}}>{goal>0?`${(goal-d.tFeet).toLocaleString()} ft remaining · ${goalPct.toFixed(1)}%`:`${d.tFeet.toLocaleString()} ft completed`}</div>
  }
  </div>
  <div style={{textAlign:_m?"left":"right"}}>
@@ -1151,7 +1191,10 @@ function RateCardsView(){
  const[showCreate,setShowCreate]=useState(false);
  const[newRC,setNewRC]=useState({client:"",customer:"",region:""});
  const[showAddCode,setShowAddCode]=useState(false);
+ const[codeSearch,setCodeSearch]=useState("");
  const[newCode,setNewCode]=useState({code:"",description:"",mapsTo:"",unit:"per foot"});
+ // ── PDF Rate Card Parser state ──
+ const[rcParse,setRcParse]=useState({status:"idle",progress:"",current:0,total:0,error:null,header:null,items:[],fileName:""});
  const groups=Object.values(rateCards);const grp=sel?rateCards[sel]:null;
  const profNames=grp?Object.keys(grp.profiles):[];
  const profType=prof==="NextGen Default"?"nextgen":USERS.some(u=>u.name===prof&&(u.role==="lineman"||u.role==="foreman"))?"lineman":"investor";
@@ -1210,6 +1253,209 @@ function RateCardsView(){
  if(codeObj?.backendId){api.del(`/rate-cards/${codeObj.backendId}`).catch(e=>console.error('Failed to delete rate card code:',e));}
  };
 
+ // ── PDF Rate Card Auto-Parse ──
+ const RATE_MAPS_TO={STRAND:"Strand",FBR:"Fiber","82C":"Fiber",LASH:"Overlash",ANCHOR:"Anchor",COIL:"Coil",DBI:"DB-Normal",DBIC:"DB-Cobble",DBIR:"DB-Rock",DBIA:"DB-Additional",DBIAR:"DB-Additional-Rock",CNDPULL:"Fiber Conduit Pulling"};
+ const guessWorkType=(code)=>{for(const[k,v]of Object.entries(RATE_MAPS_TO)){if(code.toUpperCase().includes(k))return v;}return"—";};
+ const guessUnit=(uom)=>{const u=(uom||"").toUpperCase();return u.includes("FOOT")||u==="LFT"?"per foot":"per each";};
+
+ const parseRateCardPdf=async(file)=>{
+  if(!file)return;
+  setRcParse({status:"loading",progress:"Loading PDF...",current:0,total:0,error:null,header:null,items:[],fileName:file.name});
+  try{
+   const buf=await file.arrayBuffer();
+   const lib=await new Promise((resolve,reject)=>{
+    if(window.pdfjsLib){resolve(window.pdfjsLib);return;}
+    const ex=document.querySelector('script[src*="pdf.js"]');
+    if(ex){ex.addEventListener("load",()=>window.pdfjsLib?(window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",resolve(window.pdfjsLib)):reject(new Error("PDF.js fail")));return;}
+    const s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    s.onload=()=>window.pdfjsLib?(window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",resolve(window.pdfjsLib)):reject(new Error("PDF.js fail"));
+    document.head.appendChild(s);
+   });
+   const pdf=await lib.getDocument({data:new Uint8Array(buf)}).promise;
+   // ═══ DETERMINISTIC TEXT EXTRACTION ENGINE — No AI, 100% accurate ═══
+   const CODE_RE=/^(BSPD|BDO|BM|PF|WC-|R\d|RETRIP)/;
+   const UOM_SET=new Set(["EACH","EA","LFT","FT2","FT3","USD","PER FOOT","PER FT"]);
+   let header=null;const allItems=[];const seenCodes=new Set();
+   // Track description accumulator between data rows
+   let descBuf=[];
+   for(let pi=1;pi<=pdf.numPages;pi++){
+    setRcParse(p=>({...p,progress:`Extracting page ${pi} of ${pdf.numPages}...`,current:pi,total:pdf.numPages}));
+    const pg=await pdf.getPage(pi);
+    const tc=await pg.getTextContent();
+    const vp=pg.getViewport({scale:1});
+    const pH=vp.height;
+    // Convert to top-down coordinate items
+    const items=tc.items.filter(it=>it.str.trim()).map(it=>({t:it.str.trim(),x:Math.round(it.transform[4]*10)/10,y:Math.round((pH-it.transform[5])*10)/10,w:it.width}));
+    if(!items.length)continue;
+    // Skip legal pages — no billing codes present
+    const pageText=items.map(it=>it.t).join(" ");
+    if(!/(BSPD|BDO|BM\d|PF\d|WC-|R\d-|RETRIP)/i.test(pageText)&&!/\$\s*\d/.test(pageText))continue;
+    // ── Extract header from first rate page ──
+    if(!header){
+     const h={gc_name:null,prime:"MasTec",customer:null,region:null,oracle_number:null};
+     // Sort header items by Y then X for proper spatial order
+     const gcItems=items.filter(it=>it.y<80).sort((a,b)=>a.y-b.y||a.x-b.x);
+     // Group by Y-line for proper line reconstruction
+     const gcLines={};gcItems.forEach(it=>{const yk=Math.round(it.y/4)*4;if(!gcLines[yk])gcLines[yk]=[];gcLines[yk].push(it);});
+     const lineTexts=Object.entries(gcLines).sort(([a],[b])=>a-b).map(([,items])=>items.sort((a,b)=>a.x-b.x).map(it=>it.t).join(" "));
+     const fullHeader=lineTexts.join(" | ");
+     // Find GC NAME on same line
+     for(const ln of lineTexts){const m=ln.match(/GC\s*NAME[:\s]+(.+)/i);if(m){h.gc_name=m[1].replace(/\s*(BRIGHTSPEED|SPECTRUM|ORACLE).*/i,"").trim();break;}}
+     // Customer+Region
+     for(const ln of lineTexts){const m=ln.match(/(BRIGHTSPEED|SPECTRUM|ALL\s*POINTS\s*BROADBAND|AT&T)\s+(ALABAMA|NORTH\s*CAROLINA|VIRGINIA|TENNESSEE)/i);if(m){h.customer=m[1].trim();h.region=m[2].trim();break;}}
+     // Oracle
+     for(const ln of lineTexts){const m=ln.match(/ORACLE\s*#?\s*(\d{4,})/i);if(m){h.oracle_number=m[1];break;}}
+     if(!h.oracle_number){const nums=gcItems.filter(it=>/^\d{5,}$/.test(it.t));if(nums.length)h.oracle_number=nums[0].t;}
+     if(/MasTec/i.test(fullHeader))h.prime="MasTec";
+     if(h.customer)header=h;
+    }
+    // ── Detect column boundaries dynamically ──
+    // Find header row: "Customer Name" / "Item Number" / "UOM" / "Sub Rate"
+    let colCode=110,colDesc=155,colUom=480,colRate=525;
+    const headerRow=items.find(it=>/^Item\s*Number$/i.test(it.t)||/^Item$/i.test(it.t)&&items.some(it2=>Math.abs(it2.y-it.y)<5&&/^Number$/i.test(it2.t)));
+    if(headerRow){
+     colCode=headerRow.x;
+     const uomH=items.find(it=>Math.abs(it.y-headerRow.y)<5&&/^UOM$/i.test(it.t));
+     if(uomH)colUom=uomH.x;
+     const rateH=items.find(it=>Math.abs(it.y-headerRow.y)<5&&/^Sub$/i.test(it.t));
+     if(rateH)colRate=rateH.x;
+     const descH=items.find(it=>Math.abs(it.y-headerRow.y)<5&&/^Item\s*Description$/i.test(it.t)||(/^Item$/i.test(it.t)&&it.x>colCode+30));
+     if(descH)colDesc=descH.x;
+    }
+    // ── Group text items into rows by Y ──
+    const rowMap={};
+    items.forEach(it=>{const yk=Math.round(it.y/4)*4;if(!rowMap[yk])rowMap[yk]=[];rowMap[yk].push(it);});
+    const sortedYs=Object.keys(rowMap).map(Number).sort((a,b)=>a-b);
+    // ── Process each row ──
+    for(const yk of sortedYs){
+     const row=rowMap[yk].sort((a,b)=>a.x-b.x);
+     // Find billing code in this row (near code column)
+     let code=null;
+     for(const it of row){
+      // Code column: between colCode-15 and colDesc, max 20 chars (actual codes are short like "BSPDSTRAND")
+      if(it.x>=colCode-15&&it.x<colDesc&&CODE_RE.test(it.t)&&it.t.length<=20){code=it.t;break;}
+     }
+     if(!code||seenCodes.has(code)){
+      // Accumulate description text for next code
+      const descItems=row.filter(it=>it.x>=colDesc-5&&it.x<colUom-10);
+      if(descItems.length)descBuf.push(descItems.map(it=>it.t).join(" "));
+      continue;
+     }
+     seenCodes.add(code);
+     // ── Extract UOM ──
+     let uom="";
+     const uomItems=row.filter(it=>it.x>=colUom-10&&it.x<colRate-10);
+     const uomText=uomItems.map(it=>it.t).join(" ").toUpperCase();
+     if(uomText.includes("FOOT")||uomText==="LFT")uom="PER FOOT";
+     else if(UOM_SET.has(uomText))uom=uomText;
+     else for(const u of UOM_SET){if(uomText.includes(u)){uom=u;break;}}
+     // ── Extract rate ──
+     let subRate=null;
+     const rateItems=row.filter(it=>it.x>=colRate-10);
+     const rateText=rateItems.map(it=>it.t).join("").replace(/\s/g,"");
+     if(rateText==="N/A"||rateText===""){subRate=null;}
+     else{const m=rateText.match(/\$?([\d,]+\.?\d*)/);if(m){subRate=parseFloat(m[1].replace(/,/g,""));if(isNaN(subRate))subRate=null;}}
+     // ── Extract description ──
+     const descItems=row.filter(it=>it.x>=colDesc-5&&it.x<colUom-10&&it.t!==code);
+     let desc=descItems.map(it=>it.t).join(" ");
+     // Prepend accumulated description lines
+     if(descBuf.length){desc=descBuf.join(" ")+(desc?" "+desc:"");descBuf=[];}
+     desc=desc.substring(0,300).trim();
+     // Remove leading code repetition from description
+     if(desc.startsWith(code))desc=desc.substring(code.length).replace(/^\s*[-–—]\s*/,"").trim();
+     allItems.push({item_number:code,description:desc,uom:uom||"EACH",sub_rate:subRate});
+    }
+   }
+   if(!header){
+    // Fallback: try to detect customer from codes
+    const codeStr=allItems.map(i=>i.item_number).join(" ");
+    header={gc_name:null,prime:"MasTec",customer:null,region:null,oracle_number:null};
+    if(/BSPD/.test(codeStr))header.customer="BRIGHTSPEED";
+    else if(/SPEC/.test(codeStr))header.customer="SPECTRUM";
+    else if(/APBB/.test(codeStr))header.customer="ALL POINTS BROADBAND";
+    if(!header.customer)throw new Error("Could not detect customer from PDF billing codes");
+   }
+   setRcParse({status:"preview",progress:`Done! ${allItems.length} codes extracted`,current:pdf.numPages,total:pdf.numPages,error:null,header,items:allItems,fileName:file.name});
+  }catch(e){setRcParse(p=>({...p,status:"error",error:e.message}));}
+ };
+
+ const confirmRateCardParse=()=>{
+  const{header,items,fileName}=rcParse;
+  if(!header)return;
+  const client=header.prime||"MasTec";
+  const customer=header.customer;
+  const region=header.region||"";
+  const gk=`${client}|${customer}|${region}`;
+  const nc={...rateCards};
+  const codes=[];const ngProf={};
+  // Build codes and NextGen Default profile from PDF Sub Rate
+  items.forEach(it=>{
+   if(!it.item_number)return;
+   const mapsTo=guessWorkType(it.item_number);
+   codes.push({code:it.item_number,description:it.description||"",mapsTo,unit:guessUnit(it.uom),subRate:it.sub_rate});
+   if(it.sub_rate!=null)ngProf[it.item_number]={nextgenRate:it.sub_rate};
+  });
+  // Build profiles: NextGen Default + one per lineman/foreman + one per investor
+  const profiles={"NextGen Default":ngProf};
+  const linemen=USERS.filter(u=>u.role==="lineman"||u.role==="foreman");
+  const investors=[...new Set(USERS.filter(u=>u.role==="truck_investor"||u.role==="drill_investor").map(u=>u.name))];
+  // Auto-calculate lineman rates: ~30% of nextgenRate for footage, ~35% for per-each items
+  linemen.forEach(lm=>{
+   const lmProf={};
+   codes.forEach(c=>{
+    const ng=ngProf[c.code]?.nextgenRate;
+    if(ng!=null){
+     const pct=c.unit==="per foot"?0.30:0.35;
+     lmProf[c.code]={linemanRate:+((ng*pct).toFixed(2))};
+    }
+   });
+   profiles[lm.name]=lmProf;
+  });
+  // Auto-calculate investor rates: ~17% of nextgenRate
+  investors.forEach(inv=>{
+   const ivProf={};
+   codes.forEach(c=>{
+    const ng=ngProf[c.code]?.nextgenRate;
+    if(ng!=null){ivProf[c.code]={investorRate:+((ng*0.17).toFixed(2))};}
+   });
+   profiles[inv]=ivProf;
+  });
+  const group={id:gk,client,customer,region,codes,profiles,
+   uploadedBy:"Admin User",uploadedAt:new Date().toISOString(),version:1,
+   changeLog:[`Imported from PDF: ${fileName}`,`GC: ${header.gc_name||"—"}`,`Oracle #: ${header.oracle_number||"—"}`,`${codes.length} billing codes, ${items.filter(i=>i.sub_rate!=null).length} with rates`,`${linemen.length} lineman profiles auto-generated (30% of Sub Rate)`,`${investors.length} investor profiles auto-generated (17% of Sub Rate)`],
+   gcName:header.gc_name,oracleNumber:header.oracle_number};
+  nc[gk]=group;
+  saveLocalRateCard(gk,group); // Persist to localStorage
+  setRateCards(nc);setSel(gk);
+  setRcParse({status:"idle",progress:"",current:0,total:0,error:null,header:null,items:[],fileName:""});
+ };
+
+ const deleteRateCardGroup=(gk)=>{
+  const nc={...rateCards};
+  const g=nc[gk];
+  if(!g)return;
+  // Delete from backend if has backendIds
+  const ids=new Set([...(g.backendIds||[]),...(g.codes||[]).filter(c=>c.backendId).map(c=>c.backendId)]);
+  ids.forEach(id=>api.del(`/rate-cards/${id}`).catch(e=>console.error('Failed to delete rate card:',e)));
+  // Mark as deleted in localStorage (persists across refreshes)
+  markGroupDeleted(gk);
+  delete nc[gk];
+  setRateCards(nc);
+  if(sel===gk)setSel(null);
+ };
+ const deleteClient=(client)=>{
+  const nc={...rateCards};
+  const keysToDelete=Object.keys(nc).filter(k=>nc[k].client===client);
+  keysToDelete.forEach(k=>{
+   const g=nc[k];
+   const ids=new Set([...(g.backendIds||[]),...(g.codes||[]).filter(c=>c.backendId).map(c=>c.backendId)]);
+   ids.forEach(id=>api.del(`/rate-cards/${id}`).catch(e=>console.error('Failed to delete rate card:',e)));
+   delete nc[k];
+  });
+  markClientDeleted(client,keysToDelete);
+  setRateCards(nc);if(sel&&!nc[sel])setSel(null);
+ };
+
  const[openClients,setOpenClients]=useState({});
  const[openCustomers,setOpenCustomers]=useState({});
 
@@ -1230,11 +1476,68 @@ function RateCardsView(){
  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
  <div><h1 style={{fontSize:18,fontWeight:600,margin:0,color:T.text}}>Rate Cards</h1><p style={{color:T.textMuted,fontSize:13,margin:"4px 0 0"}}>{groups.length} rate card groups</p></div>
  <div style={{display:"flex",gap:8}}>
- <Btn v="ghost" onClick={()=>setImpM(true)}>Import Excel</Btn>
+ <input type="file" accept=".pdf" id="rc-pdf-upload" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)parseRateCardPdf(f);e.target.value="";}}/>
+ <Btn v="ghost" onClick={()=>document.getElementById("rc-pdf-upload")?.click()}>Import PDF</Btn>
  <Btn onClick={()=>setShowCreate(true)}>+ New Rate Card</Btn>
  </div>
  </div>
 
+ {/* ═══ RATE CARD PDF PARSE — LOADING ═══ */}
+ {(rcParse.status==="loading"||rcParse.status==="processing")&&<Card style={{padding:14,borderColor:T.accent+"44",marginBottom:16}}>
+ <div style={{display:"flex",alignItems:"center",gap:10}}>
+ <div style={{width:20,height:20,border:`2px solid ${T.accent}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+ <div style={{flex:1}}>
+ <div style={{fontSize:13,fontWeight:600,color:T.text}}>{rcParse.progress}</div>
+ {rcParse.total>0&&<div style={{marginTop:6,height:4,background:T.bgInput,borderRadius:2,overflow:"hidden"}}>
+ <div style={{height:"100%",background:T.accent,borderRadius:2,transition:"width 0.3s",width:`${(rcParse.current/rcParse.total)*100}%`}}/>
+ </div>}
+ <div style={{fontSize:11,color:T.textDim,marginTop:4}}>File: {rcParse.fileName}</div>
+ </div></div>
+ </Card>}
+ {/* ═══ RATE CARD PDF PARSE — ERROR ═══ */}
+ {rcParse.status==="error"&&<Card style={{padding:14,borderColor:T.danger+"44",marginBottom:16,background:T.danger+"08"}}>
+ <div style={{fontSize:13,fontWeight:600,color:T.danger,marginBottom:4}}>Rate Card Parse Failed</div>
+ <div style={{fontSize:12,color:T.textDim}}>{rcParse.error}</div>
+ <Btn sz="sm" v="ghost" onClick={()=>setRcParse(p=>({...p,status:"idle"}))} style={{marginTop:8}}>Dismiss</Btn>
+ </Card>}
+ {/* ═══ RATE CARD PDF PARSE — PREVIEW ═══ */}
+ {rcParse.status==="preview"&&rcParse.header&&<Card style={{padding:16,borderColor:T.success+"44",marginBottom:16,background:T.success+"06"}}>
+ <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+ <div>
+ <div style={{fontSize:15,fontWeight:700,color:T.success}}>Rate Card Extracted</div>
+ <div style={{fontSize:12,color:T.textDim,marginTop:2}}>From: {rcParse.fileName}</div>
+ </div>
+ <div style={{display:"flex",gap:6}}>
+ <Btn sz="sm" v="success" onClick={confirmRateCardParse}>Confirm & Import</Btn>
+ <Btn sz="sm" v="ghost" onClick={()=>setRcParse({status:"idle",progress:"",current:0,total:0,error:null,header:null,items:[],fileName:""})}>Cancel</Btn>
+ </div>
+ </div>
+ <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+ <div style={{padding:10,background:T.bgInput,borderRadius:6}}><div style={{fontSize:10,color:T.textMuted,textTransform:"uppercase",letterSpacing:0.3}}>GC / Sub Name</div><div style={{fontSize:13,fontWeight:700,color:T.text,marginTop:2}}>{rcParse.header.gc_name||"—"}</div></div>
+ <div style={{padding:10,background:T.bgInput,borderRadius:6}}><div style={{fontSize:10,color:T.textMuted,textTransform:"uppercase",letterSpacing:0.3}}>Prime Contractor</div><div style={{fontSize:13,fontWeight:700,color:T.text,marginTop:2}}>{rcParse.header.prime||"—"}</div></div>
+ <div style={{padding:10,background:T.bgInput,borderRadius:6}}><div style={{fontSize:10,color:T.textMuted,textTransform:"uppercase",letterSpacing:0.3}}>Customer</div><div style={{fontSize:13,fontWeight:700,color:T.accent,marginTop:2}}>{rcParse.header.customer||"—"}</div></div>
+ <div style={{padding:10,background:T.bgInput,borderRadius:6}}><div style={{fontSize:10,color:T.textMuted,textTransform:"uppercase",letterSpacing:0.3}}>Region</div><div style={{fontSize:13,fontWeight:700,color:T.accent,marginTop:2}}>{rcParse.header.region||"—"}</div></div>
+ </div>
+ <div style={{fontSize:12,color:T.textMuted,marginBottom:8}}>{rcParse.items.length} billing codes extracted · {rcParse.items.filter(i=>i.sub_rate!=null).length} with rates · {rcParse.items.filter(i=>i.sub_rate==null).length} N/A</div>
+ <div style={{maxHeight:300,overflowY:"auto",border:`1px solid ${T.border}`,borderRadius:6,background:T.bgCard}}>
+ <table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}>
+ <thead><tr style={{background:T.bgInput,position:"sticky",top:0}}>
+ <th style={{padding:"6px 8px",textAlign:"left",color:T.textMuted,fontWeight:600}}>Code</th>
+ <th style={{padding:"6px 8px",textAlign:"left",color:T.textMuted,fontWeight:600}}>Description</th>
+ <th style={{padding:"6px 8px",textAlign:"left",color:T.textMuted,fontWeight:600}}>UOM</th>
+ <th style={{padding:"6px 8px",textAlign:"right",color:T.textMuted,fontWeight:600}}>Rate</th>
+ <th style={{padding:"6px 8px",textAlign:"left",color:T.textMuted,fontWeight:600}}>Maps To</th>
+ </tr></thead>
+ <tbody>{rcParse.items.map((it,i)=><tr key={it.item_number||i} style={{borderTop:`1px solid ${T.border}22`}}>
+ <td style={{padding:"5px 8px",fontFamily:"monospace",fontWeight:600,color:T.accent}}>{it.item_number}</td>
+ <td style={{padding:"5px 8px",color:T.text,maxWidth:300,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.description}</td>
+ <td style={{padding:"5px 8px",color:T.textDim}}>{it.uom}</td>
+ <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:it.sub_rate!=null?T.success:T.textDim}}>{it.sub_rate!=null?`$${it.sub_rate.toFixed(2)}`:"N/A"}</td>
+ <td style={{padding:"5px 8px"}}>{(()=>{const m=guessWorkType(it.item_number);return m!=="—"?<Badge label={m} color={T.cyan} bg={T.cyanSoft}/>:<span style={{color:T.textDim}}>—</span>;})()}</td>
+ </tr>)}</tbody>
+ </table>
+ </div>
+ </Card>}
  {!sel?<div>
  {Object.entries(tree).map(([client,customers])=>{
  const clientOpen=openClients[client]===true;
@@ -1249,7 +1552,10 @@ function RateCardsView(){
  <div style={{fontSize:11,color:T.textMuted}}>{Object.keys(customers).length} customer{Object.keys(customers).length!==1?"s":""} · {totalCodes} codes</div>
  </div>
  </div>
+ <div style={{display:"flex",alignItems:"center",gap:8}}>
  <Badge label="Client" color={T.accent} bg={T.accentSoft}/>
+ <div onClick={e=>{e.stopPropagation();if(confirm(`Delete all rate cards for "${client}"?`))deleteClient(client);}} style={{width:26,height:26,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:T.textDim,transition:"all 0.15s"}} onMouseEnter={e=>{e.currentTarget.style.background=T.danger+"18";e.currentTarget.style.color=T.danger;}} onMouseLeave={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color=T.textDim;}} title="Delete rate card group"><Trash size={14}/></div>
+ </div>
  </div>
  {clientOpen&&<div style={{padding:"0 12px 12px"}}>
  {Object.entries(customers).map(([customer,regions])=>{
@@ -1274,7 +1580,10 @@ function RateCardsView(){
  <div style={{fontSize:10,color:T.textDim}}>{g.codes.length} codes · {Object.keys(g.profiles).length} profiles · v{g.version}</div>
  </div>
  </div>
+ <div style={{display:"flex",alignItems:"center",gap:6}}>
  <div style={{fontSize:10,color:T.textDim}}>Updated {fd(g.uploadedAt)}</div>
+ <div onClick={e=>{e.stopPropagation();if(confirm(`Delete rate card "${g.customer} — ${g.region}"?`))deleteRateCardGroup(g.id);}} style={{width:22,height:22,borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:T.textDim,transition:"all 0.15s"}} onMouseEnter={e=>{e.currentTarget.style.background=T.danger+"18";e.currentTarget.style.color=T.danger;}} onMouseLeave={e=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color=T.textDim;}} title="Delete"><Trash size={12}/></div>
+ </div>
  </div>)}
  </div>}
  </div>;
@@ -1303,31 +1612,36 @@ function RateCardsView(){
  </div>
  </Card>
 
- <DT columns={[
- {key:"code",label:"Code",render:r=><div style={{display:"flex",alignItems:"center",gap:4}}>
+ <div style={{marginBottom:12}}>
+ <input value={codeSearch} onChange={e=>setCodeSearch(e.target.value)} placeholder="Search code, description, maps to..." style={{width:"100%",padding:"9px 14px 9px 36px",borderRadius:8,border:`1px solid ${T.border}`,background:T.bgInput,color:T.text,fontSize:13,outline:"none",transition:"border 0.15s"}} onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border}/>
+ <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.textDim} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{position:"relative",top:-27,left:12,pointerEvents:"none"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+ </div>
+
+ <DT fixedLayout columns={[
+ {key:"code",label:"Code",thStyle:{width:"12%"},render:r=><div style={{display:"flex",alignItems:"center",gap:4}}>
  <span style={{fontFamily:"monospace",fontSize:12,fontWeight:700,color:T.accent}}>{r.code}</span>
  <button onClick={e=>{e.stopPropagation();setEditM({gk:sel,code:r.code,field:"code",isCodeField:true});setEditV(r.code);}} style={{background:"none",border:"none",color:T.accent,cursor:"pointer",fontSize:12,padding:"2px 4px",opacity:0.8,borderRadius:3}}>✎</button>
  </div>},
- {key:"description",label:"Description",render:r=><div style={{display:"flex",alignItems:"center",gap:4}}>
- <span style={{fontSize:12}}>{r.description||<span style={{color:T.textDim,fontStyle:"italic"}}>No description</span>}</span>
- <button onClick={e=>{e.stopPropagation();setEditM({gk:sel,code:r.code,field:"description",isCodeField:true});setEditV(r.description||"");}} style={{background:"none",border:"none",color:T.accent,cursor:"pointer",fontSize:12,padding:"2px 4px",opacity:0.8,borderRadius:3}}>✎</button>
+ {key:"description",label:"Description",thStyle:{width:"30%"},tdStyle:{overflow:"hidden",textOverflow:"ellipsis"},render:r=><div style={{display:"flex",alignItems:"center",gap:4}} title={r.description}>
+ <span style={{fontSize:12,overflow:"hidden",textOverflow:"ellipsis"}}>{r.description||<span style={{color:T.textDim,fontStyle:"italic"}}>No description</span>}</span>
+ <button onClick={e=>{e.stopPropagation();setEditM({gk:sel,code:r.code,field:"description",isCodeField:true});setEditV(r.description||"");}} style={{background:"none",border:"none",color:T.accent,cursor:"pointer",fontSize:12,padding:"2px 4px",opacity:0.8,borderRadius:3,flexShrink:0}}>✎</button>
  </div>},
- {key:"mapsTo",label:"Maps To",render:r=><div style={{display:"flex",alignItems:"center",gap:4}}>
+ {key:"mapsTo",label:"Maps To",thStyle:{width:"15%"},render:r=><div style={{display:"flex",alignItems:"center",gap:4}}>
  {r.mapsTo&&r.mapsTo!=="—"?<Badge label={r.mapsTo} color={T.cyan} bg={T.cyanSoft}/>
  :<span style={{fontSize:11,color:T.danger}}>Not mapped</span>}
  <button onClick={e=>{e.stopPropagation();setEditM({gk:sel,code:r.code,field:"mapsTo",isCodeField:true});setEditV(r.mapsTo||"");}} style={{background:"none",border:"none",color:T.accent,cursor:"pointer",fontSize:12,padding:"2px 4px",opacity:0.8,borderRadius:3}}>✎</button>
  </div>},
- {key:"unit",label:"Unit",render:r=><div style={{display:"flex",alignItems:"center",gap:4}}>
+ {key:"unit",label:"Unit",thStyle:{width:"9%"},render:r=><div style={{display:"flex",alignItems:"center",gap:4}}>
  <span style={{fontSize:11,color:T.textMuted}}>{r.unit}</span>
  <button onClick={e=>{e.stopPropagation();setEditM({gk:sel,code:r.code,field:"unit",isCodeField:true});setEditV(r.unit||"per foot");}} style={{background:"none",border:"none",color:T.accent,cursor:"pointer",fontSize:12,padding:"2px 4px",opacity:0.8,borderRadius:3}}>✎</button>
  </div>},
- {key:"rate",label:rateLabel,
+ {key:"rate",label:rateLabel,thStyle:{width:"14%"},
  render:r=>{const v=grp.profiles[prof]?.[r.code]?.[rField];return v!=null?<span style={{fontWeight:700,color:profType==="nextgen"?T.success:profType==="lineman"?T.accent:T.purple}}>{r.unit==="per foot"?`$${v.toFixed(2)}/ft`:`$${v.toFixed(2)}/ea`}</span>:<span style={{color:T.danger,fontWeight:600}}>NOT SET</span>;}},
- {key:"a",label:"",render:r=><div style={{display:"flex",gap:4}}>
+ {key:"a",label:"",thStyle:{width:"12%"},render:r=><div style={{display:"flex",gap:4}}>
  <Btn v="ghost" sz="sm" onClick={e=>{e.stopPropagation();setEditM({gk:sel,code:r.code,pn:prof,field:rField,isCodeField:false});setEditV(grp.profiles[prof]?.[r.code]?.[rField]?.toString()||"");}}>Edit Rate</Btn>
- <button onClick={e=>{e.stopPropagation();if(confirm(`Delete code ${r.code}?`))deleteCode(r.code);}} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",fontSize:12,padding:"2px 6px",opacity:0.5}} title="Delete code">✕</button>
+ <button onClick={e=>{e.stopPropagation();if(confirm(`Delete code ${r.code}?`))deleteCode(r.code);}} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",padding:"2px 6px",opacity:0.5,display:"flex",alignItems:"center"}} title="Delete code"><Trash size={13}/></button>
  </div>},
- ]} data={grp.codes}/>
+ ]} data={codeSearch?grp.codes.filter(c=>{const q=codeSearch.toLowerCase();return (c.code||"").toLowerCase().includes(q)||(c.description||"").toLowerCase().includes(q)||(c.mapsTo||"").toLowerCase().includes(q);}):grp.codes}/>
 
  {grp.codes.length===0&&<Card style={{textAlign:"center",padding:40}}>
  <div style={{fontSize:13,color:T.textMuted,marginBottom:8}}>No codes yet</div>
@@ -1405,10 +1719,217 @@ function JobsMgmt(){
  const[fl,setFl]=useState({status:jobsPreFilter||( currentUser.role==="billing"?"Ready to Invoice":""),customer:"",search:"",fin:""});
  const[showC,setShowC]=useState(false);
  const[expandedJobId,setExpandedJobId]=useState(null);
- const[nj,setNj]=useState({department:"aerial",client:"MasTec",customer:"",region:"",location:"",olt:"",feederId:"",supervisorNotes:"",assignedLineman:"",assignedTruck:"",assignedDrill:""});
+ const[nj,setNj]=useState({department:"aerial",client:"MasTec",customer:"",region:"",location:"",olt:"",feederId:"",supervisorNotes:"",assignedLineman:"",assignedTruck:"",assignedDrill:"",_parsedPoles:null});
+ const[mapAutoParseLoading,setMapAutoParseLoading]=useState(false);
+ const[mapAutoParseError,setMapAutoParseError]=useState(null);
+ const[mapParsePhase,setMapParsePhase]=useState("");// "fields" | "poles:2/5" | ""
  const lms=USERS.filter(u=>u.role==="lineman");
  const fms=USERS.filter(u=>u.role==="foreman");
  const isAdm=["admin","supervisor","billing"].includes(currentUser.role);
+
+ // ─── PDF.js loader ───
+ const _ensurePdf=()=>new Promise((resolve,reject)=>{
+  if(window.pdfjsLib){resolve(window.pdfjsLib);return;}
+  const ex=document.querySelector('script[src*="pdf.min.js"]');
+  if(ex){ex.addEventListener("load",()=>{if(window.pdfjsLib){window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";resolve(window.pdfjsLib);}else reject(new Error("PDF.js load fail"));});return;}
+  const s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+  s.onload=()=>{if(window.pdfjsLib){window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";resolve(window.pdfjsLib);}else reject(new Error("PDF.js init fail"));};
+  s.onerror=()=>reject(new Error("Failed to load PDF.js"));document.head.appendChild(s);
+ });
+
+ // ─── Fuzzy match helpers for auto-fill ───
+ const _fuzzyMatch=(val,arr)=>{
+  if(!val)return"";const v=val.trim();
+  const exact=arr.find(a=>(typeof a==="string"?a:a.value||a)===v);if(exact)return typeof exact==="string"?exact:exact.value||exact;
+  const lower=v.toLowerCase();const ci=arr.find(a=>(typeof a==="string"?a:a.value||a).toLowerCase()===lower);if(ci)return typeof ci==="string"?ci:ci.value||ci;
+  const partial=arr.find(a=>(typeof a==="string"?a:a.value||a).toLowerCase().includes(lower)||lower.includes((typeof a==="string"?a:a.value||a).toLowerCase()));
+  if(partial)return typeof partial==="string"?partial:partial.value||partial;return"";
+ };
+ // Infer fields from feeder ID prefix
+ const _inferFromFeeder=(fid)=>{
+  if(!fid)return{};const u=fid.toUpperCase();
+  if(u.startsWith("BSPD"))return{customer:"Brightspeed",region:"Alabama",client:"MasTec"};
+  if(u.startsWith("SPEC"))return{customer:"Spectrum",region:"North Carolina",client:"MasTec"};
+  if(u.startsWith("APBB"))return{customer:"All Points Broadband",region:"Virginia",client:"MasTec"};
+  return{client:"MasTec"};
+ };
+
+ // ─── Auto-Parse Map PDF → Fill fields + extract poles/spans ───
+ const autoParseMapPdf=async(file)=>{
+  setMapAutoParseLoading(true);setMapAutoParseError(null);setMapParsePhase("AI Reading Map...");
+  // Track extracted fields for geocoding (avoids stale closure)
+  let extractedFields={location:"",region:"",customer:"",olt:"",feederId:"",department:"aerial"};
+  try{
+   const lib=await _ensurePdf();
+   const buf=await file.arrayBuffer();
+   const pdf=await lib.getDocument({data:new Uint8Array(buf)}).promise;
+   const token=localStorage.getItem("fl_access_token")||"";
+
+   // ── Phase 1: Render ALL pages ──
+   const allImgs=[];
+   for(let i=1;i<=pdf.numPages;i++){
+    setMapParsePhase(`Rendering page ${i}/${pdf.numPages}...`);
+    const pg=await pdf.getPage(i);
+    const vp=pg.getViewport({scale:2.0});
+    const cv=document.createElement("canvas");cv.width=vp.width;cv.height=vp.height;
+    await pg.render({canvasContext:cv.getContext("2d"),viewport:vp}).promise;
+    allImgs.push(cv.toDataURL("image/jpeg",0.85).split(",")[1]);
+   }
+
+   // ── Phase 2: Parse job metadata (first 2 pages) ──
+   setMapParsePhase("Identifying feeder & location...");
+   let metaParsed=null;
+   try{
+    const metaRes=await fetch("/api/v1/ai/parse-job-map",{method:"POST",
+     headers:{"Content-Type":"application/json","Authorization":`Bearer ${token}`},
+     body:JSON.stringify({images:allImgs.slice(0,2)})});
+    const metaD=await metaRes.json();
+    if(metaD.success){
+     metaParsed=metaD.data;
+     if(Array.isArray(metaParsed))metaParsed=metaParsed[0]||{};
+     console.log("[AutoParse] AI fields:",JSON.stringify(metaParsed));
+    }else{console.warn("[AutoParse] Phase 2 failed:",metaD.error);}
+   }catch(e){console.warn("[AutoParse] Phase 2 error:",e);}
+
+   // ── Phase 2b: Build field updates with fuzzy matching + fallback ──
+   const updates={client:"MasTec"};
+   if(metaParsed){
+    // Feeder ID — fuzzy match to known feeders
+    const rawFeeder=metaParsed.feeder_id||metaParsed.feederId||"";
+    const matchedFeeder=_fuzzyMatch(rawFeeder,FEEDERS);
+    if(matchedFeeder)updates.feederId=matchedFeeder;
+    else if(rawFeeder)updates.feederId=rawFeeder.toUpperCase();
+    // OLT — fuzzy match to known OLTs
+    const rawOlt=metaParsed.olt||"";
+    const matchedOlt=_fuzzyMatch(rawOlt,OLTS);
+    if(matchedOlt)updates.olt=matchedOlt;
+    else if(rawOlt)updates.olt=rawOlt.toUpperCase();
+    // Customer — fuzzy match
+    const rawCust=metaParsed.customer||"";
+    const matchedCust=_fuzzyMatch(rawCust,CUSTOMERS);
+    if(matchedCust)updates.customer=matchedCust;
+    // Region — fuzzy match
+    const rawReg=metaParsed.region||"";
+    const matchedReg=_fuzzyMatch(rawReg,REGIONS);
+    if(matchedReg)updates.region=matchedReg;
+    // Location — fuzzy match to known locations for the region
+    const rawLoc=metaParsed.location||"";
+    if(rawLoc&&updates.region){
+     const locs=LOCATIONS[updates.region]||[];
+     const matchedLoc=_fuzzyMatch(rawLoc,locs);
+     if(matchedLoc)updates.location=matchedLoc;
+     else updates.location=rawLoc;
+    }
+    // Department
+    if(metaParsed.department)updates.department=metaParsed.department==="underground"?"underground":"aerial";
+    // Notes
+    const notes=[];
+    if(metaParsed.cable_description)notes.push("Cable: "+metaParsed.cable_description);
+    if(metaParsed.drawing_numbers?.length)notes.push("Drawings: "+metaParsed.drawing_numbers.join(", "));
+    if(metaParsed.road_names?.length)notes.push("Roads: "+[...new Set(metaParsed.road_names)].join(", "));
+    if(metaParsed.total_poles)notes.push("~"+metaParsed.total_poles+" poles");
+    if(notes.length)updates.supervisorNotes=notes.join(" | ");
+   }
+   // Fallback: infer customer/region from feeder ID prefix
+   if(updates.feederId&&(!updates.customer||!updates.region)){
+    const inferred=_inferFromFeeder(updates.feederId);
+    if(!updates.customer&&inferred.customer)updates.customer=inferred.customer;
+    if(!updates.region&&inferred.region)updates.region=inferred.region;
+    if(!updates.location&&inferred.region){
+     const locs=LOCATIONS[inferred.region]||[];
+     if(locs.length>0)updates.location=locs[0];
+    }
+   }
+   // OLT fallback from region
+   if(!updates.olt&&updates.region){
+    const oltMap={"Alabama":"FLVLALXA","North Carolina":"MRGTNNCX","Virginia":"RNKVAVAX","Tennessee":"KNXTNTNX"};
+    if(oltMap[updates.region])updates.olt=oltMap[updates.region];
+   }
+   // Save for geocoding use (avoids stale closure)
+   extractedFields={...extractedFields,...updates};
+   console.log("[AutoParse] Final fields:",JSON.stringify(updates));
+   setNj(prev=>({...prev,...updates}));
+
+   // ── Phase 3: Parse poles/spans from ALL pages ──
+   const allResults=[];
+   for(let i=0;i<allImgs.length;i++){
+    setMapParsePhase(`Extracting poles: page ${i+1}/${allImgs.length}...`);
+    try{
+     const pRes=await fetch("/api/v1/ai/parse-route-poles",{method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":`Bearer ${token}`},
+      body:JSON.stringify({image:allImgs[i],pageNum:i+1,totalPages:allImgs.length})});
+     const pD=await pRes.json();
+     if(pD.success){
+      allResults.push(pD.data);
+      // Extra fallback: extract feeder from pole results if still missing
+      if(!extractedFields.feederId&&pD.data.cable){
+       const cableMatch=pD.data.cable.match(/([A-Z]{4}\d{3}\.\d{2}[A-Z]*)/i);
+       if(cableMatch){
+        const fid=cableMatch[1].toUpperCase();
+        const mf=_fuzzyMatch(fid,FEEDERS);
+        if(mf){extractedFields.feederId=mf;setNj(prev=>({...prev,feederId:mf,..._inferFromFeeder(mf)}));}
+       }
+      }
+     }else console.warn(`[AutoParse] Page ${i+1} failed:`,pD.error);
+    }catch(e){console.warn(`[AutoParse] Page ${i+1} error:`,e);}
+   }
+
+   // ── Phase 4: Aggregate poles ──
+   setMapParsePhase("Building route...");
+   const sorted=[...allResults].sort((a,b)=>(a.drawing_number||0)-(b.drawing_number||0));
+   const seenLabels=new Set();const allPoles=[];const spanMap={};
+   sorted.forEach(r=>{
+    (r.spans||[]).forEach(sp=>{if(sp.from&&sp.to&&sp.distance_ft)spanMap[sp.from]={to:sp.to,distance_ft:sp.distance_ft};});
+    (r.poles||[]).forEach(p=>{if(!p.label||seenLabels.has(p.label))return;seenLabels.add(p.label);allPoles.push({label:p.label,hoa:p.hoa||0,type:p.type||""});});
+   });
+   const routePoles=allPoles.map((p,i)=>{
+    const sp=spanMap[p.label];const distToNext=(i<allPoles.length-1&&sp)?sp.distance_ft:0;
+    return{id:"p_"+p.label.replace(/[^a-zA-Z0-9]/g,""),label:p.label,distToNext,hoa:p.hoa,lat:0,lng:0};
+   });
+
+   // ── Phase 5: Geocoding — estimate lat/lng for each pole ──
+   setMapParsePhase("Geocoding poles...");
+   const roadNames=[...new Set(sorted.flatMap(r=>r.road_names||[]))];
+   let baseLat=33.92,baseLng=-86.87,bearing=0;
+   try{
+    // Use extractedFields (local var) instead of stale nj closure
+    const loc=extractedFields.location||"";const region=extractedFields.region||"";
+    const addr=loc?`${loc}, ${region}`:`${region}, USA`;
+    if(addr.trim()&&addr.trim()!=="USA"){
+     const geoRes=await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(addr)}&format=json&limit=1`,{headers:{"User-Agent":"FiberLytic/1.0"}});
+     const geoData=await geoRes.json();
+     if(geoData.length>0){baseLat=parseFloat(geoData[0].lat);baseLng=parseFloat(geoData[0].lon);}
+    }
+    if(roadNames.length>0){
+     const roadAddr=`${roadNames[0]}, ${loc||region||"Alabama"}`;
+     const roadRes=await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(roadAddr)}&format=json&limit=2`,{headers:{"User-Agent":"FiberLytic/1.0"}});
+     const roadData=await roadRes.json();
+     if(roadData.length>=2){
+      const dLat=parseFloat(roadData[1].lat)-parseFloat(roadData[0].lat);
+      const dLng=parseFloat(roadData[1].lon)-parseFloat(roadData[0].lon);
+      bearing=Math.atan2(dLng,dLat);
+     }else if(roadData.length===1){
+      baseLat=parseFloat(roadData[0].lat);baseLng=parseFloat(roadData[0].lon);
+     }
+    }
+   }catch(e){console.warn("[AutoParse] Geocoding fallback:",e);}
+   // Space poles along bearing
+   let curLat=baseLat,curLng=baseLng;const FT_TO_DEG=0.000003048;
+   routePoles.forEach((p,i)=>{
+    p.lat=curLat;p.lng=curLng;
+    if(p.distToNext>0&&i<routePoles.length-1){
+     curLat+=p.distToNext*FT_TO_DEG*Math.cos(bearing);
+     curLng+=p.distToNext*FT_TO_DEG*Math.sin(bearing)/Math.cos(curLat*Math.PI/180);
+    }
+   });
+
+   const totalFt=routePoles.reduce((s,p)=>s+(p.distToNext||0),0);
+   console.log(`[AutoParse] Extracted ${routePoles.length} poles, ${totalFt} ft total, geocoded from ${baseLat.toFixed(4)},${baseLng.toFixed(4)}`);
+   setNj(prev=>({...prev,_parsedPoles:routePoles}));
+   setMapParsePhase(routePoles.length>0?`${routePoles.length} poles · ${totalFt.toLocaleString()} ft extracted`:"");
+  }catch(e){console.error("[AutoParse]",e);setMapAutoParseError(e.message||"Failed to analyze map");}
+  finally{setMapAutoParseLoading(false);}
+ };
 
  const filtered=useMemo(()=>{
  let f=[...jobs];
@@ -1431,7 +1952,11 @@ function JobsMgmt(){
  if(nj.mapPdfFile){try{const up=await api.uploadFile(nj.mapPdfFile);mapPdfUrl=up.url;}catch(e){console.error('Map PDF upload failed:',e);}}
  const maxId=Math.max(...jobs.map(j=>parseInt(j.id)||0),0);
  const newId=String(maxId+1).padStart(4,"0");
- const baseJob={...nj,id:newId,estimatedFootage:0,
+ const parsedPoles=nj._parsedPoles||[];
+ const totalFt=parsedPoles.reduce((s,p)=>s+(p.distToNext||0),0);
+ const njClean={...nj};delete njClean._parsedPoles;delete njClean.mapPdfFile;
+ const baseJob={...njClean,id:newId,estimatedFootage:totalFt,
+ routePoles:parsedPoles.length>0?parsedPoles:undefined,
  assignedLineman:nj.assignedLineman||null,
  status:nj.assignedLineman?"Assigned":"Unassigned",
  redlineStatus:"Not Uploaded",srNumber:null,production:null,confirmedTotals:null,billedAt:null,redlines:[],reviewNotes:"",messages:[],
@@ -1447,7 +1972,8 @@ function JobsMgmt(){
  // Persist to backend
  try{const created=await apiCreateJob(job);setJobs(prev=>[created,...prev.filter(j=>j.id!==created.id)]);}catch(e){console.error('Failed to create job:',e);setJobs([job,...jobs]);}
  setShowC(false);
- setNj({department:"aerial",client:"MasTec",customer:"",region:"",location:"",olt:"",feederId:"",supervisorNotes:"",assignedLineman:"",assignedTruck:"",assignedDrill:""});
+ setNj({department:"aerial",client:"MasTec",customer:"",region:"",location:"",olt:"",feederId:"",supervisorNotes:"",assignedLineman:"",assignedTruck:"",assignedDrill:"",_parsedPoles:null});
+ setMapParsePhase("");setMapAutoParseError(null);
  };
 
  const isLM=currentUser.role==="lineman"||currentUser.role==="foreman";
@@ -1509,7 +2035,7 @@ function JobsMgmt(){
  const commission=+(totalRev*svCommRate).toFixed(2);
  return{totalRev,commission,totalPay:+(svSalary+commission).toFixed(2),totalFeet,jobs:jobsDone,regionJobs};
  },[jobs,rateCards,isSV,svScope,svCommRate,svSalary]);
- const svWeeklyGoal=75000;// ft weekly target for their region
+ const svWeeklyGoal=0;// ft weekly target — set from real data
  const svGoalPct=Math.min((svWeekData.totalFeet/svWeeklyGoal)*100,100);
 
  // Progress bar milestones
@@ -1578,7 +2104,7 @@ function JobsMgmt(){
  const SI=({k})=><span style={{marginLeft:4,fontSize:9,color:sortKey===k?T.accent:T.textDim}}>{sortKey===k?(sortDir==="asc"?"▲":"▼"):"⇅"}</span>;
 
  const cols=isLM?[
- {key:"id",label:"Job ID",render:r=><span style={{fontWeight:700,color:T.accent,fontFamily:"monospace",fontSize:12}}>{r.id}</span>},
+ {key:"id",label:"Job ID",render:r=><span style={{fontWeight:700,color:T.accent,fontFamily:"monospace",fontSize:12}} title={r.id}>{r.feederId||r.id?.slice(0,12)}</span>},
  {key:"customer",label:"Customer"},
  {key:"location",label:"Location"},
  {key:"olt",label:"OLT",render:r=><span style={{fontFamily:"monospace",fontSize:12}}>{r.olt}</span>},
@@ -1593,7 +2119,7 @@ function JobsMgmt(){
  :r.production?<span style={{fontSize:12,color:T.textDim}}>Calculating...</span>
  :<span style={{fontSize:12,color:T.textMuted}}>Submit to see</span>;}},
  ]:isRS?[
- {key:"id",label:"Job ID",render:r=><span style={{fontWeight:700,color:T.accent,fontFamily:"monospace",fontSize:12}}>{r.id}</span>},
+ {key:"id",label:"Job ID",render:r=><span style={{fontWeight:700,color:T.accent,fontFamily:"monospace",fontSize:12}} title={r.id}>{r.feederId||r.id?.slice(0,12)}</span>},
  {key:"customer",label:"Customer"},
  {key:"location",label:"Location"},
  {key:"olt",label:"OLT",render:r=><span style={{fontFamily:"monospace",fontSize:12}}>{r.olt}</span>},
@@ -1604,7 +2130,7 @@ function JobsMgmt(){
  {key:"lm",label:"Lineman",render:r=>{const u=USERS.find(u=>u.id===r.assignedLineman);return u?<span style={{fontSize:12}}>{u.name}</span>:<span style={{color:T.textDim,fontSize:12}}>—</span>;}},
  {key:"feet",label:"Footage",render:r=>r.production?<span style={{fontWeight:600}}>{r.production.totalFeet} ft</span>:<span style={{color:T.textDim}}>—</span>},
  ]:[
- {key:"id",label:"Job ID",sort:"id",render:r=><span style={{fontWeight:700,color:T.accent,fontFamily:"monospace",fontSize:12}}>{r.id}</span>},
+ {key:"id",label:"Job ID",sort:"id",render:r=><span style={{fontWeight:700,color:T.accent,fontFamily:"monospace",fontSize:12}} title={r.id}>{r.feederId||r.id?.slice(0,12)}</span>},
  {key:"customer",label:"Customer",sort:"customer"},
  {key:"location",label:"Location"},
  {key:"olt",label:"OLT",render:r=><span style={{fontFamily:"monospace",fontSize:12}}>{r.olt}</span>},
@@ -1619,6 +2145,7 @@ function JobsMgmt(){
  :f.status==="No Production"?<span style={{color:T.textDim,fontSize:11}}>—</span>
  :<span style={{color:T.danger,fontSize:11}}>{f.status}</span>;}}]:[]),
  {key:"sr",label:"SR #",render:r=>r.srNumber?<span style={{fontFamily:"monospace",fontSize:11,color:T.success}}>{r.srNumber}</span>:<span style={{color:T.textDim}}>—</span>},
+ ...(currentUser.role==="admin"?[{key:"_del",label:"",render:r=><button onClick={e=>{e.stopPropagation();if(confirm(`Delete job ${r.feederId||r.id}?`)){apiDeleteJob(r.id);setJobs(prev=>prev.filter(x=>x.id!==r.id));}}} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",padding:"2px 6px",opacity:0.4,display:"flex",alignItems:"center"}} title="Delete job"><Trash size={14}/></button>}]:[]),
  ];
 
  return <div>
@@ -1869,11 +2396,17 @@ function JobsMgmt(){
  </div>}
  </Card>}
 
- <div style={{display:"flex",gap:_m?6:10,marginBottom:_m?10:16,flexWrap:"wrap"}}>
- <Inp value={fl.search} onChange={v=>setFl({...fl,search:v})} ph={isLM?"Search feeder, location...":isRS?"Search feeder, OLT, location...":"Search ID, feeder, OLT, location..."} style={{marginBottom:0,flex:1,minWidth:_m?140:200}}/>
- {!isLM&&!isRS&&<Inp value={fl.status} onChange={v=>setFl({...fl,status:v})} options={Object.keys(STATUS_CFG)} style={{marginBottom:0,minWidth:_m?0:160,flex:_m?"1 1 45%":undefined}}/>}
- {!isLM&&!isRS&&<Inp value={fl.customer} onChange={v=>setFl({...fl,customer:v})} options={CUSTOMERS} style={{marginBottom:0,minWidth:_m?0:160,flex:_m?"1 1 45%":undefined}}/>}
- {isAdm&&<Inp value={fl.fin} onChange={v=>setFl({...fl,fin:v})} options={["Calculated","Missing Rate","No Production","Mapping Needed"]} style={{marginBottom:0,minWidth:_m?0:150,flex:_m?"1 1 100%":undefined}}/>}
+ <div style={{display:"flex",gap:8,marginBottom:_m?8:16,flexWrap:"wrap",alignItems:"center"}}>
+ <Inp value={fl.search} onChange={v=>setFl({...fl,search:v})} ph={isLM?"Search feeder, location...":isRS?"Search feeder, OLT, location...":"Search ID, feeder, OLT..."} style={{marginBottom:0,flex:1,minWidth:_m?0:200}}/>
+ {_m&&!isLM&&!isRS&&<button onClick={()=>setFl(p=>({...p,_showFilters:!p._showFilters}))} style={{padding:"8px 12px",borderRadius:4,border:`1px solid ${(fl.status||fl.customer||fl.fin)?T.accent:T.border}`,background:(fl.status||fl.customer||fl.fin)?T.accentSoft:"transparent",color:(fl.status||fl.customer||fl.fin)?T.accent:T.textMuted,fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}>
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+  {(fl.status||fl.customer||fl.fin)?"Filtered":"Filter"}
+ </button>}
+ {(!_m||fl._showFilters)&&!isLM&&!isRS&&<>
+  <Inp value={fl.status} onChange={v=>setFl({...fl,status:v})} options={Object.keys(STATUS_CFG)} style={{marginBottom:0,minWidth:_m?0:160,flex:_m?"1 1 100%":undefined}} ph="Status..."/>
+  <Inp value={fl.customer} onChange={v=>setFl({...fl,customer:v})} options={CUSTOMERS} style={{marginBottom:0,minWidth:_m?0:160,flex:_m?"1 1 100%":undefined}} ph="Customer..."/>
+  {isAdm&&<Inp value={fl.fin} onChange={v=>setFl({...fl,fin:v})} options={["Calculated","Missing Rate","No Production","Mapping Needed"]} style={{marginBottom:0,minWidth:_m?0:150,flex:_m?"1 1 100%":undefined}} ph="Financial..."/>}
+ </>}
  </div>
 
  {!isLM&&!isRS&&<div style={{display:"flex",gap:_m?4:6,marginBottom:8,alignItems:"center",overflowX:_m?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",paddingBottom:_m?2:0}}>
@@ -1885,7 +2418,27 @@ function JobsMgmt(){
  )}
  </div>}
 
- <DT columns={cols} data={sorted} onRowClick={row=>setExpandedJobId(expandedJobId===row.id?null:row.id)} expandedId={expandedJobId} renderExpanded={row=><ViewErrorBoundary onReset={()=>setExpandedJobId(null)}><JobDetail job={row} inline/></ViewErrorBoundary>}/>
+ <DT columns={cols} data={sorted} onRowClick={row=>{if(_m){setSelectedJob(row);setView("job_detail");}else{setExpandedJobId(expandedJobId===row.id?null:row.id);}}} expandedId={expandedJobId} renderExpanded={row=><ViewErrorBoundary onReset={()=>setExpandedJobId(null)}><JobDetail job={row} inline/></ViewErrorBoundary>}
+ mobileCardRender={row=>{
+  const lm=USERS.find(u=>u.id===row.assignedLineman);
+  const hasProd=!!row.production;
+  const sc=STATUS_CFG[row.status]||{c:T.textMuted,bg:"rgba(100,116,139,0.1)"};
+  return <div style={{background:T.bgCard,border:`1px solid ${T.border}`,borderRadius:10,padding:14,borderLeft:`4px solid ${sc.c}`}}>
+   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+    <div style={{flex:1,minWidth:0}}>
+     <div style={{fontSize:16,fontWeight:700,color:T.text,letterSpacing:0.3}}>{row.feederId||row.id}</div>
+     <div style={{fontSize:12,color:T.textMuted,marginTop:2}}>{row.customer}{row.location?` · ${row.location}`:""}</div>
+    </div>
+    <SB status={row.status}/>
+   </div>
+   <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+    {row.olt&&<span style={{fontSize:11,color:T.textDim,fontFamily:"monospace",background:T.bgInput,padding:"2px 6px",borderRadius:3}}>{row.olt}</span>}
+    {lm&&<span style={{fontSize:11,color:T.accent,fontWeight:600}}>{lm.name}</span>}
+    {hasProd?<span style={{fontSize:12,fontWeight:700,color:T.success}}>{row.production.totalFeet} ft</span>:<span style={{fontSize:11,color:T.warning,fontWeight:600}}>No Production</span>}
+    {isLM&&(()=>{const e=lmEarnings(row);return e!=null?<span style={{fontSize:13,fontWeight:700,color:T.success,marginLeft:"auto"}}>{$(e)}</span>:null;})()}
+   </div>
+  </div>;
+ }}/>
 
  <Modal open={showC} onClose={()=>setShowC(false)} title="Create New Job" width={640}>
  {/* Department toggle */}
@@ -1907,8 +2460,8 @@ function JobsMgmt(){
  <Inp label="Customer" value={nj.customer} onChange={v=>setNj({...nj,customer:v})} options={CUSTOMERS}/>
  <Inp label="Region" value={nj.region} onChange={v=>setNj({...nj,region:v,location:""})} options={REGIONS}/>
  <Inp label="Location" value={nj.location} onChange={v=>setNj({...nj,location:v})} options={nj.region?LOCATIONS[nj.region]||[]:[]}/>
- <Inp label="OLT" value={nj.olt} onChange={v=>setNj({...nj,olt:v})} ph=""/>
- <Inp label="Feeder ID / Run" value={nj.feederId} onChange={v=>setNj({...nj,feederId:v})} ph=""/>
+ <Inp label="OLT" value={nj.olt} onChange={v=>setNj({...nj,olt:v})} options={OLTS}/>
+ <Inp label="Feeder ID / Run" value={nj.feederId} onChange={v=>setNj({...nj,feederId:v})} options={FEEDERS}/>
  {nj.department==="aerial"?<>
  <Inp label="Assign Lineman" value={nj.assignedLineman} onChange={v=>setNj({...nj,assignedLineman:v})} options={lms.map(l=>({value:l.id,label:l.name}))}/>
  <Inp label="Assign Truck" value={nj.assignedTruck} onChange={v=>setNj({...nj,assignedTruck:v})} options={trucks.map(t=>({value:t.id,label:`${t.id} — ${t.owner}`}))}/>
@@ -1917,27 +2470,59 @@ function JobsMgmt(){
  <Inp label="Assign Drill" value={nj.assignedDrill} onChange={v=>setNj({...nj,assignedDrill:v})} options={drills.map(d=>({value:d.id,label:`${d.id} — ${d.owner}`}))}/>
  </>}
  </div>
- {/* Map PDF Upload */}
+ {/* Map PDF Upload — click always opens file dialog, map only replaced when new file chosen */}
  <div style={{marginTop:8,marginBottom:8}}>
  <label style={{fontSize:12,fontWeight:600,color:T.textMuted,display:"block",marginBottom:6}}>Map PDF</label>
- <input type="file" accept=".pdf" id="map-pdf-upload" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f){setNj({...nj,mapPdf:f.name,mapPdfFile:f});}e.target.value="";}}/>
- <div onClick={()=>{if(nj.mapPdf){setNj({...nj,mapPdf:null,mapPdfFile:null});}else{document.getElementById("map-pdf-upload")?.click();}}}
- style={{padding:20,border:`2px dashed ${nj.mapPdf?T.success:T.border}`,borderRadius:4,textAlign:"center",cursor:"pointer",background:nj.mapPdf?T.successSoft:"transparent",transition:"all 0.15s"}}>
- {nj.mapPdf?<div>
+ <input type="file" accept=".pdf" id="map-pdf-upload" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f){setNj(prev=>({...prev,mapPdf:f.name,mapPdfFile:f}));autoParseMapPdf(f);}e.target.value="";}}/>
+ <div onClick={()=>{if(!mapAutoParseLoading)document.getElementById("map-pdf-upload")?.click();}}
+ style={{padding:20,border:`2px dashed ${mapAutoParseLoading?T.accent:nj.mapPdf?T.success:T.border}`,borderRadius:4,textAlign:"center",cursor:mapAutoParseLoading?"wait":"pointer",background:mapAutoParseLoading?T.accentSoft:nj.mapPdf?T.successSoft:"transparent",transition:"all 0.15s",position:"relative"}}>
+ {mapAutoParseLoading?<div>
+ <div style={{width:22,height:22,border:`2.5px solid ${T.accent}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.8s linear infinite",margin:"0 auto"}}/>
+ <div style={{fontSize:13,fontWeight:700,color:T.accent,marginTop:8}}>{mapParsePhase||"AI Reading Map..."}</div>
+ <div style={{fontSize:11,color:T.textMuted,marginTop:3}}>Extracting feeder, OLT, location, customer, poles & spans...</div>
+ <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+ </div>:nj.mapPdf?<div>
  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={T.success} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:"inline-block"}}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
  <div style={{fontSize:13,fontWeight:600,color:T.success,marginTop:4}}>{nj.mapPdf}</div>
- <div style={{fontSize:11,color:T.textMuted,marginTop:2}}>Click to remove</div>
+ <div style={{fontSize:11,color:T.textMuted,marginTop:2}}>Click to replace with another map</div>
+ {mapAutoParseError&&<div style={{fontSize:11,color:T.danger,marginTop:4,fontWeight:600}}>AI parse error: {mapAutoParseError}</div>}
+ {mapParsePhase&&!mapAutoParseLoading&&<div style={{fontSize:11,color:T.accent,marginTop:4,fontWeight:700}}>{mapParsePhase}</div>}
+ {/* Remove button */}
+ <button onClick={e=>{e.stopPropagation();setNj(prev=>({...prev,mapPdf:null,mapPdfFile:null,_parsedPoles:null}));setMapAutoParseError(null);setMapParsePhase("");}} style={{position:"absolute",top:6,right:6,width:22,height:22,borderRadius:"50%",border:`1px solid ${T.border}`,background:T.bg,color:T.textMuted,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>×</button>
  </div>:<div>
  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={T.textMuted} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{display:"inline-block"}}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
  <div style={{fontSize:13,color:T.textMuted,marginTop:4}}>Upload map PDF for lineman</div>
- <div style={{fontSize:11,color:T.textDim,marginTop:2}}>Supports feeder, poles, and span maps</div>
+ <div style={{fontSize:11,color:T.textDim,marginTop:2}}>AI will auto-fill all fields + extract poles for Live Mode</div>
  </div>}
  </div>
  </div>
+ {/* ═══ POLES PREVIEW — show extracted poles before creating job ═══ */}
+ {nj._parsedPoles&&nj._parsedPoles.length>0&&<div style={{marginTop:8,marginBottom:8,padding:12,background:T.successSoft,border:`1px solid ${T.success}33`,borderRadius:6}}>
+ <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+ <div style={{fontSize:13,fontWeight:700,color:T.success}}>Route: {nj._parsedPoles.length} poles · {nj._parsedPoles.reduce((s,p)=>s+(p.distToNext||0),0).toLocaleString()} ft</div>
+ <div style={{fontSize:10,color:T.textMuted}}>Ready for Live Mode</div>
+ </div>
+ <div style={{maxHeight:160,overflowY:"auto",background:T.bgCard,borderRadius:4,border:`1px solid ${T.border}`}}>
+ <table style={{width:"100%",fontSize:10,borderCollapse:"collapse"}}>
+ <thead><tr style={{background:T.bgInput,position:"sticky",top:0}}>
+ <th style={{padding:"4px 6px",textAlign:"left",color:T.textMuted,fontWeight:600}}>#</th>
+ <th style={{padding:"4px 6px",textAlign:"left",color:T.textMuted,fontWeight:600}}>Pole</th>
+ <th style={{padding:"4px 6px",textAlign:"right",color:T.textMuted,fontWeight:600}}>HOA</th>
+ <th style={{padding:"4px 6px",textAlign:"right",color:T.textMuted,fontWeight:600}}>Span ft</th>
+ </tr></thead>
+ <tbody>{nj._parsedPoles.map((p,i)=><tr key={p.id} style={{borderTop:`1px solid ${T.border}15`}}>
+ <td style={{padding:"3px 6px",color:T.textDim}}>{i+1}</td>
+ <td style={{padding:"3px 6px",color:T.text,fontWeight:600,fontFamily:"monospace",fontSize:10}}>{p.label}</td>
+ <td style={{padding:"3px 6px",textAlign:"right",color:T.cyan,fontFamily:"monospace"}}>{p.hoa||"—"}</td>
+ <td style={{padding:"3px 6px",textAlign:"right",color:T.accent,fontFamily:"monospace"}}>{p.distToNext||"—"}</td>
+ </tr>)}</tbody>
+ </table>
+ </div>
+ </div>}
  <Inp label="Supervisor Notes" value={nj.supervisorNotes} onChange={v=>setNj({...nj,supervisorNotes:v})} textarea/>
  <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:8}}>
  <Btn v="ghost" onClick={()=>setShowC(false)}>Cancel</Btn>
- <Btn onClick={handleC} disabled={!nj.customer||!nj.region||!nj.feederId}>Create Job</Btn>
+ <Btn onClick={handleC} disabled={!nj.customer||!nj.region||!nj.feederId}>{nj._parsedPoles?.length>0?`Create Job (${nj._parsedPoles.length} poles)`:"Create Job"}</Btn>
  </div>
  </Modal>
  </div>;
@@ -1945,7 +2530,7 @@ function JobsMgmt(){
 
 // ─── JOB DETAIL ──────────────────────────────────────────────────────────────
 function JobDetail({job:jobProp,inline}={})  {
- const{selectedJob,setSelectedJob,setView,jobs,setJobs,rateCards,currentUser,apiUpdateJob,isMobile:_m}=useApp();
+ const{selectedJob,setSelectedJob,setView,jobs,setJobs,rateCards,currentUser,apiUpdateJob,apiDeleteJob,trucks,drills,isMobile:_m}=useApp();
  const[tab,setTab]=useState(currentUser.role==="redline_specialist"?"redlines":(currentUser.role==="lineman"||currentUser.role==="foreman")&&!(jobProp||selectedJob)?.production?"production":"info");
  const emptyProdRow=()=>({spanWorkType:"S+F",strandSpan:"",anchora:false,fiberMarking:"",coil:false,poleTransfer:false,snowshoe:false});
  const[prodRows,setProdRows]=useState(()=>Array.from({length:12},()=>emptyProdRow()));
@@ -1966,8 +2551,17 @@ function JobDetail({job:jobProp,inline}={})  {
  const[liveProdMode,setLiveProdMode]=useState(false);
  const[liveSession,setLiveSession]=useState(null);
  const[routeSetup,setRouteSetup]=useState(false);
+ // Map Parser state
+ const[mapParseStatus,setMapParseStatus]=useState("idle"); // idle | loading | processing | preview | error
+ const[mapParseProgress,setMapParseProgress]=useState({current:0,total:0,msg:""});
+ const[mapParseError,setMapParseError]=useState(null);
+ const[mapParsedPoles,setMapParsedPoles]=useState([]);
+ const[mapParseRawResults,setMapParseRawResults]=useState([]);
  // RS confirming totals
  const[ct,setCt]=useState({strand:"",overlash:"",fiber:"",conduit:"",anchors:"",coils:"",snowshoes:"",dbNormal:"",dbCobble:"",dbRock:""});
+ // Edit Job modal state
+ const[editJob,setEditJob]=useState(false);
+ const[ej,setEj]=useState({});
  const j=jobProp||selectedJob;if(!j)return null;
  const lm=USERS.find(u=>u.id===j.assignedLineman);
  const isLM=currentUser.role==="lineman"||currentUser.role==="foreman";const isRS=currentUser.role==="redline_specialist";
@@ -1989,6 +2583,191 @@ function JobDetail({job:jobProp,inline}={})  {
 
  const isUG=j.department==="underground";
  const upd=(u,auditEntry)=>{const log=[...(j.auditLog||[])];if(auditEntry)log.push({...auditEntry,ts:new Date().toISOString(),actor:currentUser.id,actorName:currentUser.name});const up={...j,...u,auditLog:log,updatedAt:new Date().toISOString()};setJobs(prev=>prev.map(x=>x.id===j.id?up:x));if(!inline)setSelectedJob(up);apiUpdateJob(j.id,u).catch(e=>console.error('Failed to persist job update:',e));};
+
+ // ─── Edit Job handlers ─────────────────
+ const lms=USERS.filter(u=>u.role==="lineman");
+ const fms=USERS.filter(u=>u.role==="foreman");
+ const openEditJob=()=>{setEj({department:j.department||"aerial",client:j.client||"MasTec",customer:j.customer||"",region:j.region||"",location:j.location||"",olt:j.olt||"",feederId:j.feederId||"",supervisorNotes:j.supervisorNotes||"",assignedLineman:j.assignedLineman||"",assignedTruck:j.assignedTruck||"",assignedDrill:j.assignedDrill||""});setEditJob(true);};
+ const saveEditJob=async()=>{const patch={};
+  if(ej.department!==j.department)patch.department=ej.department;
+  if(ej.client!==j.client)patch.client=ej.client;
+  if(ej.customer!==j.customer)patch.customer=ej.customer;
+  if(ej.region!==j.region)patch.region=ej.region;
+  if(ej.location!==j.location)patch.location=ej.location;
+  if(ej.olt!==j.olt)patch.olt=ej.olt;
+  if(ej.feederId!==j.feederId)patch.feederId=ej.feederId;
+  if(ej.supervisorNotes!==j.supervisorNotes)patch.supervisorNotes=ej.supervisorNotes;
+  if(ej.assignedLineman!==(j.assignedLineman||""))patch.assignedLineman=ej.assignedLineman||null;
+  if(ej.assignedTruck!==(j.assignedTruck||""))patch.assignedTruck=ej.assignedTruck||null;
+  if(ej.assignedDrill!==(j.assignedDrill||""))patch.assignedDrill=ej.assignedDrill||null;
+  // Upload map PDF if a new file was selected
+  if(ej._mapPdfFile){
+   try{const up=await api.uploadFile(ej._mapPdfFile);patch.mapPdf=up.url;}catch(e){console.error('Map PDF upload failed:',e);}
+  }
+  // Auto-update status based on assignment
+  if(patch.assignedLineman&&(!j.assignedLineman||j.status==="Unassigned"))patch.status="Assigned";
+  if(Object.keys(patch).length>0)upd(patch,{action:"edit",detail:"Job edited"});
+  setEditJob(false);
+ };
+
+ // ─── AUTO-PARSE MAP PDF — POLE EXTRACTION ENGINE ─────────────────────────
+ const ensurePdfJsForParse=()=>new Promise((resolve,reject)=>{
+  if(window.pdfjsLib){resolve(window.pdfjsLib);return;}
+  const existing=document.querySelector('script[src*="pdf.min.js"]');
+  if(existing){existing.addEventListener("load",()=>{if(window.pdfjsLib){window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";resolve(window.pdfjsLib);}else reject(new Error("PDF.js failed"));});return;}
+  const s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+  s.onload=()=>{if(window.pdfjsLib){window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";resolve(window.pdfjsLib);}else reject(new Error("PDF.js failed"));};
+  s.onerror=()=>reject(new Error("Failed to load PDF.js"));
+  document.head.appendChild(s);
+ });
+
+ const MAP_PARSE_PROMPT=`You are a fiber optic construction map analyzer specialized in extracting pole data.
+For each page, extract ALL poles and spans visible on the construction drawing.
+
+Extract:
+1. POLES: Every pole marked as MRE#XXX (or similar designation). For each:
+   - label: The pole ID (e.g., "MRE#293")
+   - hoa: Height of Attachment value in feet (e.g., 20.1)
+   - type: MGNV or other designation if visible
+2. SPANS: Distance between consecutive poles in feet (e.g., 273', 301')
+3. DRAWING NUMBER: Construction drawing number
+4. TO_PRINT references: Which drawings connect to this page
+5. CABLE: Cable specification (e.g., "Armored 48F BSPD001.04h")
+6. ROAD_NAMES: Any visible road/street names
+7. MST_POINTS: Splice/transition points
+
+CRITICAL: List poles in sequential order as they appear along the route.
+Link each span distance to the two poles it connects.
+
+Respond ONLY with valid JSON (no markdown, no backticks):
+{"drawing_number":null,"poles":[{"label":"MRE#293","hoa":20.1,"type":"MGNV"}],"spans":[{"from":"MRE#293","to":"MRE#294","distance_ft":273}],"to_print_refs":[],"cable":"","road_names":[],"mst_points":[],"notes":""}`;
+
+ const handleMapUpload=async(file)=>{
+  if(!file)return;
+  try{
+   const up=await api.uploadFile(file);
+   upd({mapPdf:up.url},{action:"map_upload",detail:`Map PDF uploaded: ${file.name}`});
+   // Auto-parse immediately with the URL we just got
+   parseMapPdf(up.url);
+  }catch(err){console.error("Map upload failed:",err);alert("Map upload failed: "+err.message);}
+ };
+
+ const parseMapPdf=async(overrideUrl)=>{
+  const mapUrl=overrideUrl||j.mapPdf;
+  if(!mapUrl)return;
+  setMapParseStatus("loading");setMapParseError(null);setMapParsedPoles([]);setMapParseRawResults([]);
+  setMapParseProgress({current:0,total:0,msg:"Loading PDF..."});
+  try{
+   // Step 1: Load PDF and render pages to images
+   const pdfUrl=mapUrl.startsWith("/uploads/")?mapUrl:`/uploads/${mapUrl}`;
+   const resp=await fetch(pdfUrl);
+   if(!resp.ok)throw new Error(`Failed to fetch PDF: ${resp.status}`);
+   const buf=await resp.arrayBuffer();
+   const lib=await ensurePdfJsForParse();
+   const pdf=await lib.getDocument({data:new Uint8Array(buf)}).promise;
+   const imgs=[];
+   for(let i=1;i<=pdf.numPages;i++){
+    setMapParseProgress({current:i,total:pdf.numPages,msg:`Rendering page ${i} of ${pdf.numPages}...`});
+    const pg=await pdf.getPage(i);
+    const vp=pg.getViewport({scale:2.0});
+    const cv=document.createElement("canvas");cv.width=vp.width;cv.height=vp.height;
+    await pg.render({canvasContext:cv.getContext("2d"),viewport:vp}).promise;
+    const du=cv.toDataURL("image/jpeg",0.85);
+    imgs.push({pageNum:i,base64:du.split(",")[1]});
+   }
+
+   // Step 2: Send each page to backend AI proxy
+   setMapParseStatus("processing");
+   const _rpToken=localStorage.getItem("fl_access_token")||"";
+   const allResults=[];
+   for(let i=0;i<imgs.length;i++){
+    setMapParseProgress({current:i+1,total:imgs.length,msg:`Analyzing page ${i+1} of ${imgs.length}...`});
+    try{
+     const res=await fetch("/api/v1/ai/parse-route-poles",{method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":`Bearer ${_rpToken}`},
+      body:JSON.stringify({image:imgs[i].base64,pageNum:i+1,totalPages:imgs.length})});
+     const d=await res.json();
+     if(!d.success)throw new Error(d.error||"AI parse failed");
+     allResults.push({...d.data,_pdfPage:i+1,_success:true});
+    }catch(e){allResults.push({_pdfPage:i+1,_success:false,_error:e.message,drawing_number:null,poles:[],spans:[],to_print_refs:[],road_names:[]});}
+   }
+   setMapParseRawResults(allResults);
+
+   // Step 3: Aggregate and deduplicate poles across all pages
+   // Sort results by drawing_number to get correct sequential order
+   const sorted=[...allResults].filter(r=>r._success).sort((a,b)=>(a.drawing_number||0)-(b.drawing_number||0));
+   const seenLabels=new Set();
+   const allPoles=[];
+   const spanMap={};// label -> {to, distance_ft}
+   sorted.forEach(r=>{
+    (r.spans||[]).forEach(sp=>{if(sp.from&&sp.to&&sp.distance_ft)spanMap[sp.from]={to:sp.to,distance_ft:sp.distance_ft};});
+    (r.poles||[]).forEach(p=>{
+     if(!p.label||seenLabels.has(p.label))return;
+     seenLabels.add(p.label);
+     allPoles.push({label:p.label,hoa:p.hoa||0,type:p.type||""});
+    });
+   });
+
+   // Assign distToNext from spans
+   const routePoles=allPoles.map((p,i)=>{
+    const sp=spanMap[p.label];
+    const distToNext=(i<allPoles.length-1&&sp)?sp.distance_ft:0;
+    return{id:"p_"+p.label.replace(/[^a-zA-Z0-9]/g,""),label:p.label,distToNext,hoa:p.hoa};
+   });
+
+   // Step 4: Geocoding — estimate lat/lng for each pole
+   const roadNames=[...new Set(sorted.flatMap(r=>r.road_names||[]))];
+   let baseLat=33.92,baseLng=-86.87,bearing=0; // default Alabama coords
+   try{
+    const addr=`${j.location||""} ${j.city||""} ${j.state||""}`.trim();
+    if(addr){
+     const geoRes=await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(addr)}&format=json&limit=1`,{headers:{"User-Agent":"FiberLytic/1.0"}});
+     const geoData=await geoRes.json();
+     if(geoData.length>0){baseLat=parseFloat(geoData[0].lat);baseLng=parseFloat(geoData[0].lon);}
+    }
+    // Try road name for better bearing
+    if(roadNames.length>0){
+     const roadAddr=`${roadNames[0]}, ${j.city||j.state||"Alabama"}`;
+     const roadRes=await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(roadAddr)}&format=json&limit=2`,{headers:{"User-Agent":"FiberLytic/1.0"}});
+     const roadData=await roadRes.json();
+     if(roadData.length>=2){
+      const dLat=parseFloat(roadData[1].lat)-parseFloat(roadData[0].lat);
+      const dLng=parseFloat(roadData[1].lon)-parseFloat(roadData[0].lon);
+      bearing=Math.atan2(dLng,dLat);
+     }
+    }
+   }catch(e){console.warn("Geocoding failed, using defaults:",e);}
+
+   // Space poles along bearing using distances
+   let curLat=baseLat,curLng=baseLng;
+   const FT_TO_DEG=0.000003048;
+   routePoles.forEach((p,i)=>{
+    p.lat=curLat;p.lng=curLng;
+    if(p.distToNext>0&&i<routePoles.length-1){
+     curLat+=p.distToNext*FT_TO_DEG*Math.cos(bearing);
+     curLng+=p.distToNext*FT_TO_DEG*Math.sin(bearing)/Math.cos(curLat*Math.PI/180);
+    }
+   });
+
+   setMapParsedPoles(routePoles);
+   setMapParseStatus("preview");
+   setMapParseProgress({current:imgs.length,total:imgs.length,msg:"Done! Review extracted poles below."});
+  }catch(e){
+   setMapParseError(e.message);setMapParseStatus("error");
+  }
+ };
+
+ const confirmParsedPoles=()=>{
+  const totalFt=mapParsedPoles.reduce((s,p)=>s+(p.distToNext||0),0);
+  upd({routePoles:mapParsedPoles,estimatedFootage:totalFt,poleCount:mapParsedPoles.length},{type:"auto_parse_map",detail:`Auto-parsed ${mapParsedPoles.length} poles, ${totalFt} ft from map PDF`});
+  setMapParseStatus("idle");setMapParsedPoles([]);
+ };
+
+ const cancelParsedPoles=()=>{
+  setMapParseStatus("idle");setMapParsedPoles([]);setMapParseRawResults([]);
+ };
+ // ─── END AUTO-PARSE MAP PDF ──────────────────────────────────────────────
+
  const subProd=()=>{
  if(isUG){
  // Underground production submission
@@ -2057,21 +2836,27 @@ function JobDetail({job:jobProp,inline}={})  {
  const logCount=(j.auditLog||[]).length;
  tabs.push({key:"activity",label:`Activity${logCount>0?" ("+logCount+")":""}`});
 
- return <div style={inline?{padding:"18px 22px"}:{}}>
- {!inline&&<div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20}}>
- <Btn v="ghost" sz="sm" onClick={()=>{setSelectedJob(null);setView("jobs");}}>← Back</Btn>
- <div style={{flex:1}}>
- <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
- <h1 style={{fontSize:18,fontWeight:600,margin:0,color:T.text}}>{j.id}</h1>
- {!isLM&&<SB status={j.status}/>}
- {isLM&&(j.production?<Badge label="Submitted" color={T.success} bg={T.successSoft}/>:<Badge label="Needs Production" color={T.warning} bg={T.warningSoft}/>)}
- {canFin&&<FB status={fin.status}/>}
+ return <div style={inline?{padding:_m?"14px 12px":"18px 22px"}:{}}>
+ {!inline&&<div style={{marginBottom:_m?14:20}}>
+ <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:_m?10:12}}>
+  <button onClick={()=>{setSelectedJob(null);setView("jobs");}} style={{display:"flex",alignItems:"center",gap:4,padding:_m?"10px 12px":"5px 12px",borderRadius:6,border:`1px solid ${T.border}`,background:T.bgCard,color:T.text,cursor:"pointer",fontSize:_m?13:12,fontWeight:600,minHeight:_m?40:undefined}}>
+   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+   {_m?"Back":"← Back"}
+  </button>
+  <div style={{flex:1,minWidth:0}}>
+   <div style={{fontSize:_m?18:18,fontWeight:700,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{j.feederId||j.id}</div>
+  </div>
+  {j.srNumber&&!isRS&&<div style={{background:T.successSoft,padding:"4px 10px",borderRadius:4,flexShrink:0}}>
+   <span style={{fontSize:10,color:T.textMuted}}>SR# </span><span style={{fontSize:12,fontWeight:700,fontFamily:"monospace",color:T.success}}>{j.srNumber}</span>
+  </div>}
  </div>
- <p style={{color:T.textMuted,fontSize:13,margin:"2px 0 0"}}>{j.feederId} · {j.customer} · {j.location}{lm&&!isRS?"":(lm?` · Lineman: ${lm.name}`:"")}</p>
+ <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:4}}>
+  {!isLM&&<SB status={j.status}/>}
+  {isLM&&(j.production?<Badge label="Submitted" color={T.success} bg={T.successSoft}/>:<Badge label="Needs Production" color={T.warning} bg={T.warningSoft}/>)}
+  {canFin&&<FB status={fin.status}/>}
+  <span style={{fontSize:_m?12:13,color:T.textMuted}}>{j.customer} · {j.location}</span>
  </div>
- {j.srNumber&&!isRS&&<div style={{background:T.successSoft,padding:"6px 14px",borderRadius:4,display:"flex",alignItems:"center",gap:6}}>
- <span style={{fontSize:11,color:T.textMuted}}>SR#</span><span style={{fontSize:14,fontWeight:700,fontFamily:"monospace",color:T.success}}>{j.srNumber}</span>
- </div>}
+ {lm&&!isRS&&<div style={{fontSize:11,color:T.textDim}}>Lineman: {lm.name}</div>}
  </div>}
 
  {/* Inline mode header */}
@@ -2087,33 +2872,112 @@ function JobDetail({job:jobProp,inline}={})  {
  <TabBar tabs={tabs} active={tab} onChange={setTab}/>
 
  {tab==="info"&&<Card>
- <h3 style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:12}}>Job Information</h3>
+ <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+ <h3 style={{fontSize:14,fontWeight:700,color:T.text,margin:0}}>Job Information</h3>
+ {isAdm&&<div style={{display:"flex",gap:6}}>
+<Btn sz="sm" v="ghost" onClick={openEditJob}>Edit Job</Btn>
+<Btn sz="sm" v="ghost" onClick={()=>{if(window.confirm(`Delete job ${j.feederId} (ID: ${j.id})? This cannot be undone.`)){apiDeleteJob(j.id);setJobs(prev=>prev.filter(x=>x.id!==j.id));if(!inline){setSelectedJob(null);setView("jobs");}}}} style={{color:T.danger}}>Delete</Btn>
+</div>}
+ </div>
  {FR("Job ID",j.id)}{FR("Client",j.client)}{FR("Customer",j.customer)}{FR("Region",j.region)}{FR("Location",j.location)}{FR("OLT",j.olt)}{FR("Feeder ID / Run",j.feederId)}{FR("Assigned Lineman",lm?.name||"Unassigned")}{FR("Assigned Truck",j.assignedTruck)}{currentUser.role!=="client_manager"&&FR("Truck Investor",j.truckInvestor)}{FR("Status",j.status)}{FR("SR Number",j.srNumber)}
  {j.supervisorNotes&&<div style={{marginTop:16,padding:14,background:T.bgInput,borderRadius:4,borderLeft:`3px solid ${T.accent}`}}>
  <div style={{fontSize:11,fontWeight:600,color:T.accent,marginBottom:4}}>SUPERVISOR NOTES</div>
  <div style={{fontSize:13,color:T.text,lineHeight:1.5}}>{j.supervisorNotes}</div>
  </div>}
  {j.mapPdf?<div style={{marginTop:16,padding:16,background:T.successSoft,borderRadius:4,border:`1px solid ${T.success}33`,display:"flex",alignItems:"center",gap:12}}>
- <span style={{fontSize:28}}></span>
+ <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={T.success} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
  <div style={{flex:1}}>
  <div style={{fontSize:13,fontWeight:700,color:T.text}}>Map PDF</div>
- <div style={{fontSize:12,color:T.success,fontWeight:600}}>{j.mapPdf}</div>
+ <div style={{fontSize:12,color:T.success,fontWeight:600}}>{j.mapPdf.split("/").pop()}</div>
  <div style={{fontSize:11,color:T.textMuted,marginTop:2}}>Feeder route, poles, and spans for {j.feederId}</div>
  </div>
- <Btn v="success" sz="sm">View Map</Btn>
+ <a href={j.mapPdf.startsWith("/uploads/")?j.mapPdf:`/uploads/${j.mapPdf}`} target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}><Btn v="success" sz="sm">View</Btn></a>
+ {isAdm&&<Btn v="ghost" sz="sm" onClick={()=>document.getElementById(`map-upload-${j.id}`)?.click()}>Replace</Btn>}
+ <input type="file" accept=".pdf" id={`map-upload-${j.id}`} style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)handleMapUpload(f);e.target.value="";}}/>
  </div>
- :<div style={{marginTop:16,padding:16,background:T.bgInput,borderRadius:4,border:`1px dashed ${T.border}`,display:"flex",alignItems:"center",gap:12}}>
+ :<div style={{marginTop:16}}>
+ <input type="file" accept=".pdf" id={`map-upload-${j.id}`} style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)handleMapUpload(f);e.target.value="";}}/>
+ {isAdm?<div onClick={()=>document.getElementById(`map-upload-${j.id}`)?.click()} style={{padding:16,background:T.bgInput,borderRadius:4,border:`2px dashed ${T.border}`,display:"flex",alignItems:"center",gap:12,cursor:"pointer",transition:"all 0.15s"}}>
+ <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={T.textMuted} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+ <div style={{flex:1}}>
+ <div style={{fontSize:13,fontWeight:600,color:T.text}}>Upload Map PDF</div>
+ <div style={{fontSize:11,color:T.textMuted}}>Click to upload construction map for this job</div>
+ </div>
+ </div>:<div style={{padding:16,background:T.bgInput,borderRadius:4,border:`1px dashed ${T.border}`,display:"flex",alignItems:"center",gap:12}}>
  <span style={{fontSize:24,opacity:0.5}}></span>
  <div style={{flex:1}}>
  <div style={{fontSize:13,fontWeight:600,color:T.textDim}}>No Map Uploaded</div>
- <div style={{fontSize:11,color:T.textDim}}>Admin can upload a map PDF when editing this job.</div>
+ <div style={{fontSize:11,color:T.textDim}}>Waiting for supervisor to upload map.</div>
  </div>
+ </div>}
  </div>}
  {isAdm&&j.department==="aerial"&&<div style={{marginTop:16}}>
  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
  <div><div style={{fontSize:13,fontWeight:700,color:T.text}}>Route Setup (Live Mode)</div><div style={{fontSize:11,color:T.textMuted}}>{j.routePoles?.length||0} poles · {(j.routePoles||[]).reduce((s,p)=>s+(p.distToNext||0),0)} ft total</div></div>
+ <div style={{display:"flex",gap:6}}>
+ {j.mapPdf&&<Btn sz="sm" v="success" onClick={parseMapPdf} disabled={mapParseStatus==="loading"||mapParseStatus==="processing"}>{(j.routePoles?.length||0)>0?"Re-parse Map":"Parse Map"}</Btn>}
  <Btn sz="sm" v={routeSetup?"primary":"ghost"} onClick={()=>setRouteSetup(!routeSetup)}>{routeSetup?"Done":"Edit Route"}</Btn>
  </div>
+ </div>
+ {/* ═══ MAP PARSE LOADING/PROGRESS ═══ */}
+ {(mapParseStatus==="loading"||mapParseStatus==="processing")&&<Card style={{padding:14,borderColor:T.accent+"44",marginBottom:10}}>
+ <div style={{display:"flex",alignItems:"center",gap:10}}>
+ <div style={{width:20,height:20,border:`2px solid ${T.accent}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+ <div style={{flex:1}}>
+ <div style={{fontSize:12,fontWeight:600,color:T.text}}>{mapParseProgress.msg}</div>
+ {mapParseProgress.total>0&&<div style={{marginTop:6,height:4,background:T.bgInput,borderRadius:2,overflow:"hidden"}}>
+ <div style={{height:"100%",background:T.accent,borderRadius:2,transition:"width 0.3s",width:`${(mapParseProgress.current/mapParseProgress.total)*100}%`}}/>
+ </div>}
+ </div>
+ </div>
+ <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+ </Card>}
+ {/* ═══ MAP PARSE ERROR ═══ */}
+ {mapParseStatus==="error"&&<Card style={{padding:14,borderColor:T.danger+"44",marginBottom:10,background:T.danger+"08"}}>
+ <div style={{fontSize:12,fontWeight:600,color:T.danger,marginBottom:6}}>Parse Failed</div>
+ <div style={{fontSize:11,color:T.textDim}}>{mapParseError}</div>
+ <div style={{marginTop:8,display:"flex",gap:6}}>
+ <Btn sz="sm" v="primary" onClick={parseMapPdf}>Retry</Btn>
+ <Btn sz="sm" v="ghost" onClick={()=>setMapParseStatus("idle")}>Dismiss</Btn>
+ </div>
+ </Card>}
+ {/* ═══ MAP PARSE PREVIEW — confirm extracted poles ═══ */}
+ {mapParseStatus==="preview"&&mapParsedPoles.length>0&&<Card style={{padding:14,borderColor:T.success+"44",marginBottom:10,background:T.success+"06"}}>
+ <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+ <div>
+ <div style={{fontSize:13,fontWeight:700,color:T.success}}>Extracted {mapParsedPoles.length} Poles</div>
+ <div style={{fontSize:11,color:T.textMuted}}>Total: {mapParsedPoles.reduce((s,p)=>s+(p.distToNext||0),0).toLocaleString()} ft</div>
+ </div>
+ <div style={{display:"flex",gap:6}}>
+ <Btn sz="sm" v="success" onClick={confirmParsedPoles}>Confirm & Save</Btn>
+ <Btn sz="sm" v="ghost" onClick={cancelParsedPoles}>Cancel</Btn>
+ </div>
+ </div>
+ <div style={{maxHeight:300,overflowY:"auto",border:`1px solid ${T.border}`,borderRadius:6,background:T.bgCard}}>
+ <table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}>
+ <thead><tr style={{background:T.bgInput,position:"sticky",top:0}}>
+ <th style={{padding:"6px 8px",textAlign:"left",color:T.textMuted,fontWeight:600}}>#</th>
+ <th style={{padding:"6px 8px",textAlign:"left",color:T.textMuted,fontWeight:600}}>Pole Label</th>
+ <th style={{padding:"6px 8px",textAlign:"right",color:T.textMuted,fontWeight:600}}>HOA</th>
+ <th style={{padding:"6px 8px",textAlign:"right",color:T.textMuted,fontWeight:600}}>Span (ft)</th>
+ </tr></thead>
+ <tbody>{mapParsedPoles.map((p,i)=><tr key={p.id} style={{borderTop:`1px solid ${T.border}22`}}>
+ <td style={{padding:"5px 8px",color:T.textDim}}>{i+1}</td>
+ <td style={{padding:"5px 8px",color:T.text,fontWeight:600,fontFamily:"monospace"}}>{p.label}</td>
+ <td style={{padding:"5px 8px",textAlign:"right",color:T.cyan,fontFamily:"monospace"}}>{p.hoa||"—"}</td>
+ <td style={{padding:"5px 8px",textAlign:"right",color:T.accent,fontFamily:"monospace"}}>{p.distToNext||"—"}</td>
+ </tr>)}</tbody>
+ </table>
+ </div>
+ {mapParseRawResults.some(r=>!r._success)&&<div style={{marginTop:8,fontSize:11,color:T.warning}}>
+ {mapParseRawResults.filter(r=>!r._success).length} page(s) failed to parse and were skipped.
+ </div>}
+ </Card>}
+ {mapParseStatus==="preview"&&mapParsedPoles.length===0&&<Card style={{padding:14,borderColor:T.warning+"44",marginBottom:10,background:T.warning+"08"}}>
+ <div style={{fontSize:12,fontWeight:600,color:T.warning}}>No poles found in PDF</div>
+ <div style={{fontSize:11,color:T.textDim,marginTop:4}}>The AI could not extract pole data from this map. Try adding poles manually.</div>
+ <Btn sz="sm" v="ghost" onClick={()=>setMapParseStatus("idle")} style={{marginTop:8}}>Dismiss</Btn>
+ </Card>}
  {routeSetup&&<Card style={{padding:14,borderColor:T.accent+"44"}}>
  <div style={{fontSize:11,color:T.textMuted,marginBottom:12}}>Add poles in order. Enter span distances from the construction map PDF.</div>
  {(j.routePoles||[]).map((pole,pi)=><div key={pole.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
@@ -2122,15 +2986,61 @@ function JobDetail({job:jobProp,inline}={})  {
  <span style={{fontSize:11,color:T.textDim}}>→</span>
  <input type="number" value={pole.distToNext||""} onChange={e=>{const rp=[...(j.routePoles||[])];rp[pi]={...rp[pi],distToNext:parseInt(e.target.value)||0};upd({routePoles:rp});}} placeholder="ft" style={{width:60,padding:"6px 8px",borderRadius:6,border:`1px solid ${T.border}`,background:T.bgInput,color:T.text,fontSize:12,fontFamily:"monospace"}}/>
  <span style={{fontSize:10,color:T.textDim}}>ft</span>
- <button onClick={()=>{const rp=(j.routePoles||[]).filter((_,i)=>i!==pi);upd({routePoles:rp});}} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",fontSize:14,padding:2}}>✕</button>
+ <button onClick={()=>{const rp=(j.routePoles||[]).filter((_,i)=>i!==pi);upd({routePoles:rp});}} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",padding:2,display:"flex",alignItems:"center"}}><Trash size={13}/></button>
  </div>)}
  <Btn sz="sm" onClick={()=>{const rp=[...(j.routePoles||[]),{id:"p"+Date.now(),label:"",distToNext:0}];upd({routePoles:rp});}}>+ Add Pole</Btn>
  {(j.routePoles?.length||0)>0&&<div style={{marginTop:10,padding:8,background:T.bgInput,borderRadius:6,fontSize:12}}><span style={{color:T.textMuted}}>Total:</span> <b style={{color:T.accent}}>{(j.routePoles||[]).reduce((s,p)=>s+(p.distToNext||0),0)} ft</b> · <b>{j.routePoles.length}</b> poles</div>}
  </Card>}
- {!routeSetup&&(j.routePoles?.length||0)>0&&<div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:8}}>{j.routePoles.map((p,i)=><div key={p.id} style={{display:"flex",alignItems:"center",gap:2}}><span style={{width:22,height:22,borderRadius:"50%",background:T.accentSoft,border:`1.5px solid ${T.accent}`,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:700,color:T.accent}}>{p.label||i+1}</span>{i<j.routePoles.length-1&&<span style={{fontSize:9,color:T.textDim,fontFamily:"monospace"}}>{p.distToNext}→</span>}</div>)}</div>}
+ {!routeSetup&&(j.routePoles?.length||0)>0&&<div style={{overflowX:"auto",marginTop:10,paddingBottom:6}}>
+<div style={{display:"flex",alignItems:"center",gap:0,minWidth:"max-content"}}>
+{j.routePoles.map((p,i)=><React.Fragment key={p.id}>
+<div style={{padding:"5px 10px",borderRadius:8,background:T.accentSoft,border:`1.5px solid ${T.accent}`,fontSize:11,fontWeight:700,color:T.accent,fontFamily:"monospace",whiteSpace:"nowrap",lineHeight:1.2,textAlign:"center"}}>{p.label||`P${i+1}`}</div>
+{i<j.routePoles.length-1&&<div style={{display:"flex",alignItems:"center",padding:"0 3px"}}><span style={{fontSize:9,color:T.textDim,fontFamily:"monospace",whiteSpace:"nowrap"}}>{p.distToNext}ft</span><span style={{color:T.textDim,fontSize:10,margin:"0 1px"}}>→</span></div>}
+</React.Fragment>)}</div></div>}
  </div>}
 
  </Card>}
+
+ {/* ═══ EDIT JOB MODAL ═══ */}
+ <Modal open={editJob} onClose={()=>setEditJob(false)} title="Edit Job" width={560}>
+ <div style={{display:"grid",gridTemplateColumns:_m?"1fr":"1fr 1fr",gap:_m?"0":"0 16px"}}>
+ <Inp label="Client" value={ej.client||""} onChange={v=>setEj({...ej,client:v})} options={CLIENTS}/>
+ <Inp label="Customer" value={ej.customer||""} onChange={v=>setEj({...ej,customer:v})} options={CUSTOMERS}/>
+ <Inp label="Region" value={ej.region||""} onChange={v=>setEj({...ej,region:v,location:""})} options={REGIONS}/>
+ <Inp label="Location" value={ej.location||""} onChange={v=>setEj({...ej,location:v})} options={ej.region?LOCATIONS[ej.region]||[]:[]}/>
+ <Inp label="OLT" value={ej.olt||""} onChange={v=>setEj({...ej,olt:v})} options={OLTS}/>
+ <Inp label="Feeder ID / Run" value={ej.feederId||""} onChange={v=>setEj({...ej,feederId:v})} options={FEEDERS}/>
+ {(ej.department||"aerial")==="aerial"?<>
+ <Inp label="Assign Lineman" value={ej.assignedLineman||""} onChange={v=>setEj({...ej,assignedLineman:v})} options={lms.map(l=>({value:l.id,label:l.name}))}/>
+ <Inp label="Assign Truck" value={ej.assignedTruck||""} onChange={v=>setEj({...ej,assignedTruck:v})} options={trucks.map(t=>({value:t.id,label:`${t.id} — ${t.owner}`}))}/>
+ </>:<>
+ <Inp label="Assign Foreman" value={ej.assignedLineman||""} onChange={v=>setEj({...ej,assignedLineman:v})} options={fms.map(f=>({value:f.id,label:f.name}))}/>
+ <Inp label="Assign Drill" value={ej.assignedDrill||""} onChange={v=>setEj({...ej,assignedDrill:v})} options={drills.map(d=>({value:d.id,label:`${d.id} — ${d.owner}`}))}/>
+ </>}
+ </div>
+ {/* Map PDF Upload */}
+ <div style={{marginTop:8,marginBottom:8}}>
+ <label style={{fontSize:12,fontWeight:600,color:T.textMuted,display:"block",marginBottom:6}}>Map PDF</label>
+ <input type="file" accept=".pdf" id="edit-map-pdf-upload" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)setEj(prev=>({...prev,_mapPdfFile:f,_mapPdfName:f.name}));e.target.value="";}}/>
+ <div onClick={()=>document.getElementById("edit-map-pdf-upload")?.click()}
+ style={{padding:14,border:`2px dashed ${ej._mapPdfName?T.success:j.mapPdf?T.success:T.border}`,borderRadius:4,textAlign:"center",cursor:"pointer",background:ej._mapPdfName?T.successSoft:j.mapPdf?T.successSoft:"transparent",transition:"all 0.15s"}}>
+ {ej._mapPdfName?<div>
+ <div style={{fontSize:13,fontWeight:600,color:T.success}}>{ej._mapPdfName}</div>
+ <div style={{fontSize:11,color:T.textMuted,marginTop:2}}>New file selected — will upload on save</div>
+ </div>:j.mapPdf?<div>
+ <div style={{fontSize:13,fontWeight:600,color:T.success}}>{j.mapPdf.split("/").pop()}</div>
+ <div style={{fontSize:11,color:T.textMuted,marginTop:2}}>Click to replace with another map</div>
+ </div>:<div>
+ <div style={{fontSize:13,color:T.textMuted}}>Click to upload map PDF</div>
+ </div>}
+ </div>
+ </div>
+ <Inp label="Supervisor Notes" value={ej.supervisorNotes||""} onChange={v=>setEj({...ej,supervisorNotes:v})} textarea/>
+ <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:12}}>
+ <Btn v="ghost" onClick={()=>setEditJob(false)}>Cancel</Btn>
+ <Btn onClick={saveEditJob}>Save Changes</Btn>
+ </div>
+ </Modal>
 
  {tab==="production"&&<div>
  {/* ═══ MAP VIEWER — always shown in production tab ═══ */}
@@ -2224,7 +3134,34 @@ function JobDetail({job:jobProp,inline}={})  {
  {ovlTotal>0&&<div style={{padding:"6px 10px",background:T.warning+"12",borderRadius:6,border:`1px solid ${T.warning}25`}}><span style={{fontSize:10,fontWeight:700,color:T.warning}}>OVL: {ovlTotal.toLocaleString()} ft</span></div>}
  {coilBonusFt>0&&<div style={{padding:"6px 10px",background:T.cyan+"08",borderRadius:6,border:`1px solid ${T.cyan}15`}}><span style={{fontSize:10,fontWeight:600,color:T.cyan}}>Coil bonus: +{coilBonusFt} ft</span></div>}
  </div>
- {/* Column headers */}
+ {/* Production spans — mobile: compact cards, desktop: full grid */}
+ {_m?<div style={{padding:"8px 10px"}}>
+  {spans.map((r,i)=>{
+   const hasData=r.strandSpan||r.fiberMarking||r.anchora||r.coil||r.poleTransfer||r.snowshoe;
+   if(!hasData)return null;
+   const flags=[];
+   if(r.anchora||r.anchor)flags.push({l:"Anchor",c:T.warning});
+   if(r.coil)flags.push({l:"Coil",c:T.cyan});
+   if(r.poleTransfer)flags.push({l:"P.T",c:T.orange});
+   if(r.snowshoe)flags.push({l:"Snow",c:T.success});
+   return <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:`1px solid ${T.border}15`}}>
+    <div style={{width:28,textAlign:"center",fontSize:12,fontWeight:700,color:T.accent,flexShrink:0}}>{r.spanId||i+1}</div>
+    <div style={{flex:"0 0 auto"}}>{wtBadge(r.spanWorkType||"S+F")}</div>
+    <div style={{fontSize:15,fontWeight:700,color:T.text,fontFamily:"monospace",flex:"0 0 auto"}}>{r.strandSpan||"—"}</div>
+    {r.fiberMarking&&<div style={{fontSize:11,color:T.purple,fontFamily:"monospace",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,minWidth:0}}>{r.fiberMarking}</div>}
+    <div style={{display:"flex",gap:3,flexShrink:0}}>
+     {flags.map(f=><span key={f.l} style={{fontSize:8,fontWeight:700,color:f.c,background:f.c+"15",padding:"2px 4px",borderRadius:3}}>{f.l}</span>)}
+    </div>
+   </div>;
+  })}
+  {/* Mobile totals */}
+  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderTop:`2px solid ${T.accent}30`,marginTop:4}}>
+   <span style={{fontSize:11,fontWeight:700,color:T.accent}}>TOTAL ({spans.length} spans)</span>
+   <span style={{fontSize:16,fontWeight:700,color:T.accent,fontFamily:"monospace"}}>{j.production.totalFeet?.toLocaleString()} ft</span>
+  </div>
+ </div>
+ :<>
+ {/* Desktop: full 8-column grid */}
  <div style={{display:"grid",gridTemplateColumns:"1fr 2.5fr 3fr 1.5fr 6fr 1.5fr 1.5fr 1.5fr",gap:4,padding:"8px 10px 6px",background:T.bgInput,borderBottom:`1px solid ${T.border}`}}>
  <div style={{fontSize:8,fontWeight:700,color:T.textMuted,textTransform:"uppercase",textAlign:"center"}}>#</div>
  <div style={{fontSize:8,fontWeight:700,color:T.textMuted,textTransform:"uppercase",textAlign:"center"}}>Type</div>
@@ -2235,7 +3172,6 @@ function JobDetail({job:jobProp,inline}={})  {
  <div style={{fontSize:8,fontWeight:700,color:T.textMuted,textTransform:"uppercase",textAlign:"center",lineHeight:1.1}}>P.T</div>
  <div style={{fontSize:8,fontWeight:700,color:T.textMuted,textTransform:"uppercase",textAlign:"center"}}>Snow</div>
  </div>
- {/* Data rows */}
  {spans.map((r,i)=>{
  const hasData=r.strandSpan||r.fiberMarking||r.anchora||r.coil||r.poleTransfer||r.snowshoe;
  return <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 2.5fr 3fr 1.5fr 6fr 1.5fr 1.5fr 1.5fr",gap:4,padding:"5px 10px",alignItems:"center",borderBottom:`1px solid ${T.border}12`,background:hasData?T.success+"04":"transparent"}}>
@@ -2248,7 +3184,6 @@ function JobDetail({job:jobProp,inline}={})  {
  <div style={{textAlign:"center"}}>{chkR(r.poleTransfer,T.orange)}</div>
  <div style={{textAlign:"center"}}>{chkR(r.snowshoe,T.success)}</div>
  </div>;})}
- {/* Totals row */}
  <div style={{display:"grid",gridTemplateColumns:"1fr 2.5fr 3fr 1.5fr 6fr 1.5fr 1.5fr 1.5fr",gap:4,padding:"8px 10px",alignItems:"center",background:T.accent+"08",borderTop:`2px solid ${T.accent}30`}}>
  <div style={{fontSize:10,fontWeight:700,color:T.accent,textAlign:"center"}}>Σ</div>
  <div style={{fontSize:9,color:T.textMuted,textAlign:"center"}}>{spans.length}</div>
@@ -2259,6 +3194,7 @@ function JobDetail({job:jobProp,inline}={})  {
  <div style={{fontSize:9,fontWeight:700,color:T.orange,textAlign:"center"}}>{j.production.poleTransfers||""}</div>
  <div style={{fontSize:9,fontWeight:700,color:T.success,textAlign:"center"}}>{j.production.snowshoes||""}</div>
  </div>
+ </>}
  </div>;
  })()}
  {j.production.comments&&<div style={{margin:"0 16px 16px",padding:12,background:T.bgInput,borderRadius:4,borderLeft:`3px solid ${T.warning}`}}>
@@ -2310,7 +3246,7 @@ function JobDetail({job:jobProp,inline}={})  {
  <span style={{fontSize:13,fontWeight:700,color:T.text}}>Day {i+1}</span>
  <div style={{display:"flex",alignItems:"center",gap:6}}>
  <Badge label={d.groundType} color={gtColors[d.groundType]||T.text} bg={(gtColors[d.groundType]||T.text)+"18"}/>
- {ugDays.length>1&&<button onClick={()=>remUgDay(i)} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",fontSize:16,padding:2}}>✕</button>}
+ {ugDays.length>1&&<button onClick={()=>remUgDay(i)} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",padding:2,display:"flex",alignItems:"center"}}><Trash size={14}/></button>}
  </div>
  </div>
  <div style={{marginBottom:10}}>
@@ -3354,6 +4290,7 @@ function PayrollView(){
  </div>
  </Card>}
  </div>}
+
  </div>;
 }
 
@@ -3798,21 +4735,11 @@ function Sidebar({view,setView,currentUser,onSwitch,sidebarOpen,setSidebarOpen,i
  return <>{isMobile&&sidebarOpen&&<div onClick={()=>setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:99,animation:"fadeIn 0.15s ease"}}/>}
  <div onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave} style={{width:W,minHeight:"100vh",background:S.bg,borderRight:`1px solid ${S.border}`,display:"flex",flexDirection:"column",position:"fixed",left:isMobile?(sidebarOpen?0:-300):0,top:0,bottom:0,zIndex:100,transition:isMobile?"left 0.28s cubic-bezier(0.25, 0.1, 0.25, 1)":"width 0.22s cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 0.22s ease",overflow:isMobile?"auto":"hidden",whiteSpace:"nowrap",boxShadow:sidebarOpen?`8px 0 24px rgba(0,0,0,0.25)`:"none"}}>
  <div style={{padding:collapsed?"20px 12px":"20px 18px",borderBottom:`1px solid ${S.border}`,transition:"padding 0.22s cubic-bezier(0.25, 0.1, 0.25, 1)"}}> <div style={{display:"flex",alignItems:"center",gap:10}}>
- <svg width={collapsed?36:38} height={collapsed?36:38} viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
- <rect width="120" height="120" rx="26" fill="#FFFFFF"/>
- <rect x="2" y="2" width="116" height="116" rx="24" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="2"/>
- <path d="M28 85 C38 85, 42 42, 55 42 C68 42, 65 78, 78 78 C91 78, 88 35, 95 35" stroke="#111111" strokeWidth="5.5" strokeLinecap="round" fill="none"/>
- <circle cx="55" cy="42" r="6" fill="#111111" opacity="0.9"/>
- <circle cx="78" cy="78" r="5" fill="#111111" opacity="0.75"/>
- <circle cx="95" cy="35" r="4.5" fill="#111111" opacity="0.85"/>
- <circle cx="28" cy="85" r="4.5" fill="#111111" opacity="0.7"/>
- <circle cx="55" cy="42" r="11" fill="none" stroke="#111111" strokeWidth="1.5" opacity="0.15"/>
- <circle cx="78" cy="78" r="9" fill="none" stroke="#111111" strokeWidth="1.5" opacity="0.1"/>
- <rect x="22" y="62" width="5" height="14" rx="2" fill="#111111" opacity="0.2"/>
- <rect x="30" y="56" width="5" height="20" rx="2" fill="#111111" opacity="0.25"/>
- <rect x="38" y="66" width="5" height="10" rx="2" fill="#111111" opacity="0.15"/>
+ <svg width={collapsed?32:36} height={collapsed?32:36} viewBox="0 0 120 120" fill="none">
+ <rect width="120" height="120" rx="24" fill="#FFFFFF"/>
+ <path d="M30 26 L30 94 L42 94 L42 60 L62 60 L62 94 L92 94 L92 82 L74 82 L74 48 L42 48 L42 38 L74 38 L74 26 Z" fill="#111111"/>
  </svg>
- {!collapsed&&<div style={{opacity:sidebarOpen?1:0,transition:"opacity 0.18s ease 0.04s"}}><div style={{fontSize:14,letterSpacing:2,textTransform:"uppercase"}}><span style={{fontWeight:700,color:"#FFFFFF"}}>FIBER</span><span style={{fontWeight:400,color:"#666666"}}>LYTIC</span></div><div style={{fontSize:9,color:S.textDim,fontWeight:500,letterSpacing:0.6,textTransform:"uppercase",marginTop:2}}>Fiber Construction Operations</div></div>}
+ {!collapsed&&<div style={{opacity:sidebarOpen?1:0,transition:"opacity 0.18s ease 0.04s"}}><div style={{fontSize:15,letterSpacing:2.5,textTransform:"uppercase",fontFamily:"'Instrument Sans',sans-serif"}}><span style={{fontWeight:700,color:"#FFFFFF"}}>FIBER</span><span style={{fontWeight:400,color:"#666666"}}>LYTIC</span></div><div style={{fontSize:9,color:S.textDim,fontWeight:500,letterSpacing:0.6,textTransform:"uppercase",marginTop:2,fontFamily:"'DM Sans',sans-serif"}}>by Provium Tech</div></div>}
  </div>
  </div>
  <div style={{padding:collapsed?"16px 6px":"16px 10px",flex:1,overflowY:"auto",overflowX:"hidden",transition:"padding 0.22s cubic-bezier(0.25, 0.1, 0.25, 1)"}}>
@@ -4941,7 +5868,7 @@ function MaterialsView(){
  <div style={{display:"flex",alignItems:"center",gap:6}}>
  <div style={{fontSize:11,color:T.textMuted}}>{p.warehouse}</div>
  <button onClick={()=>editPickup(p)} style={{background:"none",border:`1px solid ${T.border}`,borderRadius:3,color:T.accent,cursor:"pointer",padding:"2px 6px",fontSize:10}}>Edit</button>
- <button onClick={()=>{if(confirm(`Delete ${p.id}?`))deletePickup(p.id);}} style={{background:"none",border:`1px solid ${T.border}`,borderRadius:3,color:T.danger,cursor:"pointer",padding:"2px 6px",fontSize:10}}>✕</button>
+ <button onClick={()=>{if(confirm(`Delete ${p.id}?`))deletePickup(p.id);}} style={{background:"none",border:`1px solid ${T.border}`,borderRadius:3,color:T.danger,cursor:"pointer",padding:"2px 6px",display:"flex",alignItems:"center"}}><Trash size={12}/></button>
  </div>
  </div>
  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -5040,7 +5967,7 @@ function MaterialsView(){
  </div>
  <div style={{display:"flex",gap:4}}>
  <button onClick={()=>editPickup(p)} style={{background:"none",border:`1px solid ${T.border}`,borderRadius:3,color:T.accent,cursor:"pointer",padding:"3px 8px",fontSize:10,fontWeight:600}}>Edit</button>
- <button onClick={()=>{if(confirm(`Delete ${p.id}?`))deletePickup(p.id);}} style={{background:"none",border:`1px solid ${T.border}`,borderRadius:3,color:T.danger,cursor:"pointer",padding:"3px 8px",fontSize:10,fontWeight:600}}>✕</button>
+ <button onClick={()=>{if(confirm(`Delete ${p.id}?`))deletePickup(p.id);}} style={{background:"none",border:`1px solid ${T.border}`,borderRadius:3,color:T.danger,cursor:"pointer",padding:"3px 8px",display:"flex",alignItems:"center"}}><Trash size={12}/></button>
  </div>
  </div>
  </div>;})}
@@ -5472,9 +6399,11 @@ function MapCutterView(){
  const[mcProgress,setMcProgress]=useState({current:0,total:0});
  const[mcError,setMcError]=useState(null);
  const[mcSelFeeder,setMcSelFeeder]=useState(null);
- const[mcView,setMcView]=useState("feeders");
+ const[mcView,setMcView]=useState("pages");
  const[mcFileName,setMcFileName]=useState("");
  const[createdJobs,setCreatedJobs]=useState({});
+ const[mcViewPage,setMcViewPage]=useState(null);
+ const[mcSelectedPages,setMcSelectedPages]=useState([]);
  const fileRef=useRef(null);
 
  const ensurePdfJs=()=>new Promise((resolve,reject)=>{
@@ -5521,17 +6450,17 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
  const analyzePages=async(imgs)=>{
  setMcStatus("processing");setMcProgress({current:0,total:imgs.length});
+ const _mcToken=localStorage.getItem("fl_access_token")||"";
  const all=[];
  for(let i=0;i<imgs.length;i++){
  setMcProgress({current:i+1,total:imgs.length});
  try{
- const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
- body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:MCPROMPT,
- messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:"image/jpeg",data:imgs[i].base64}},{type:"text",text:`Analyze construction drawing page (PDF page ${i+1}). Extract all BSPD feeder IDs, construction drawing number, TO PRINT references. Return ONLY valid JSON.`}]}]})});
+ const res=await fetch("/api/v1/ai/parse-feeders",{method:"POST",
+ headers:{"Content-Type":"application/json","Authorization":`Bearer ${_mcToken}`},
+ body:JSON.stringify({image:imgs[i].base64,pageNum:i+1})});
  const d=await res.json();
- const txt=d.content.map(x=>x.type==="text"?x.text:"").filter(Boolean).join("\n");
- const parsed=JSON.parse(txt.replace(/```json|```/g,"").trim());
- all.push({...parsed,_pdfPage:i+1,_success:true});
+ if(!d.success)throw new Error(d.error||"AI parse failed");
+ all.push({...d.data,_pdfPage:i+1,_success:true});
  }catch(e){all.push({_pdfPage:i+1,_success:false,_error:e.message,construction_drawing_number:null,feeders:[],to_print_references:[]});}
  }
  setMcResults(all);setMcStatus("done");
@@ -5571,13 +6500,42 @@ Respond ONLY with valid JSON (no markdown, no backticks):
  setCreatedJobs(prev=>({...prev,[f.bspd_id]:newId}));
  };
 
+ const getFeedersForPage=(pageNum)=>{
+ const r=mcResults.find(x=>x._pdfPage===pageNum);
+ return r?.feeders||[];
+ };
+ const getResultForPage=(pageNum)=>mcResults.find(x=>x._pdfPage===pageNum)||null;
+
+ const downloadPagePng=(pageNum)=>{
+ const pg=mcPages.find(p=>p.pageNum===pageNum);if(!pg)return;
+ const a=document.createElement("a");a.href=pg.dataUrl;a.download=`${mcFileName.replace(/\.pdf$/i,"")}_page_${pageNum}.jpg`;a.click();
+ };
+
+ const downloadAllPages=async()=>{
+ const pages=mcSelectedPages.length>0?mcPages.filter(p=>mcSelectedPages.includes(p.pageNum)):mcPages;
+ for(let i=0;i<pages.length;i++){
+ downloadPagePng(pages[i].pageNum);
+ if(i<pages.length-1)await new Promise(r=>setTimeout(r,200));
+ }};
+
+ const printPages=()=>{
+ const pages=mcSelectedPages.length>0?mcPages.filter(p=>mcSelectedPages.includes(p.pageNum)):mcPages;
+ const w=window.open("","_blank");if(!w)return;
+ w.document.write(`<html><head><title>${mcFileName} — Print</title><style>@media print{@page{margin:0.5cm;}img{page-break-after:always;max-width:100%;height:auto;}}body{margin:0;padding:0;}img{width:100%;margin-bottom:8px;}</style></head><body>`);
+ pages.forEach(p=>{w.document.write(`<img src="${p.dataUrl}" alt="Page ${p.pageNum}"/>`);});
+ w.document.write("</body></html>");w.document.close();setTimeout(()=>w.print(),400);
+ };
+
+ const togglePageSelect=(pn)=>setMcSelectedPages(prev=>prev.includes(pn)?prev.filter(x=>x!==pn):[...prev,pn]);
+ const toggleAllPages=()=>setMcSelectedPages(prev=>prev.length===mcPages.length?[]:mcPages.map(p=>p.pageNum));
+
  return <div>
  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
  <div>
  <h2 style={{fontSize:20,fontWeight:700,color:T.text,margin:0}}>Map Cutter</h2>
  <p style={{fontSize:13,color:T.textMuted,marginTop:2}}>AI-powered feeder extraction from construction drawing PDFs</p>
  </div>
- {mcStatus==="done"&&<Btn v="ghost" onClick={()=>{setMcStatus("idle");setMcPages([]);setMcResults([]);setMcSelFeeder(null);setCreatedJobs({});}}>↻ New PDF</Btn>}
+ {mcStatus==="done"&&<Btn v="ghost" onClick={()=>{setMcStatus("idle");setMcPages([]);setMcResults([]);setMcSelFeeder(null);setCreatedJobs({});setMcViewPage(null);setMcSelectedPages([]);setMcView("pages");}}>↻ New PDF</Btn>}
  </div>
 
  {/* Upload Zone */}
@@ -5622,9 +6580,43 @@ Respond ONLY with valid JSON (no markdown, no backticks):
 
  {/* Tabs */}
  <div style={{display:"flex",gap:4,marginBottom:16,background:T.bgInput,padding:3,borderRadius:4,width:"fit-content"}}>
- {[{id:"feeders",l:"Feeders"},{id:"drawings",l:"By Drawing"},{id:"raw",l:"Raw JSON"}].map(t=>
+ {[{id:"pages",l:`Pages (${mcPages.length})`},{id:"feeders",l:`Feeders (${feeders.length})`},{id:"drawings",l:"By Drawing"},{id:"raw",l:"Raw JSON"}].map(t=>
  <button key={t.id} onClick={()=>setMcView(t.id)} style={{padding:"6px 16px",borderRadius:6,border:"none",fontSize:12,fontWeight:600,cursor:"pointer",background:mcView===t.id?T.accent:"transparent",color:mcView===t.id?"#fff":T.textMuted,transition:"all 0.15s"}}>{t.l}</button>)}
  </div>
+
+ {/* Pages Gallery View */}
+ {mcView==="pages"&&<div>
+ <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
+ <Btn sz="sm" v="ghost" onClick={toggleAllPages}>{mcSelectedPages.length===mcPages.length?"Deselect All":"Select All"}</Btn>
+ <Btn sz="sm" onClick={downloadAllPages}>{mcSelectedPages.length>0?`Download ${mcSelectedPages.length} Pages`:"Download All"}</Btn>
+ <Btn sz="sm" v="ghost" onClick={printPages}>Print</Btn>
+ <Btn sz="sm" v="ghost" onClick={()=>{const b=new Blob([JSON.stringify(mcResults,null,2)],{type:"application/json"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download="feeder-extraction.json";a.click();URL.revokeObjectURL(u);}}>Export JSON</Btn>
+ {mcSelectedPages.length>0&&<span style={{fontSize:11,color:T.textMuted}}>{mcSelectedPages.length} selected</span>}
+ </div>
+ <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12}}>
+ {mcPages.map(pg=>{const res=getResultForPage(pg.pageNum);const pFeeders=getFeedersForPage(pg.pageNum);const isSel=mcSelectedPages.includes(pg.pageNum);
+ return <Card key={pg.pageNum} onClick={()=>setMcViewPage(pg.pageNum)} className="card-hover" style={{cursor:"pointer",overflow:"hidden",borderColor:isSel?T.accent:undefined,position:"relative"}}>
+ <div style={{position:"relative"}}>
+ <img src={pg.dataUrl} alt={`Page ${pg.pageNum}`} style={{width:"100%",maxHeight:200,objectFit:"cover",objectPosition:"top",display:"block",borderRadius:"6px 6px 0 0"}}/>
+ <div style={{position:"absolute",top:6,left:6,display:"flex",gap:4}}>
+ {res?.construction_drawing_number&&<span style={{fontFamily:"monospace",fontSize:10,fontWeight:700,color:"#fff",background:"rgba(0,0,0,0.65)",padding:"2px 7px",borderRadius:4}}>DWG #{res.construction_drawing_number}</span>}
+ <span style={{fontSize:10,fontWeight:600,color:"#fff",background:"rgba(0,0,0,0.5)",padding:"2px 7px",borderRadius:4}}>Page {pg.pageNum}</span>
+ </div>
+ <div style={{position:"absolute",top:6,right:6}} onClick={e=>{e.stopPropagation();togglePageSelect(pg.pageNum);}}>
+ <div style={{width:20,height:20,borderRadius:4,border:`2px solid ${isSel?T.accent:"rgba(255,255,255,0.7)"}`,background:isSel?T.accent:"rgba(0,0,0,0.3)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
+ {isSel&&<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
+ </div>
+ </div>
+ </div>
+ <div style={{padding:"8px 10px"}}>
+ {pFeeders.length>0?<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+ {pFeeders.map((f,fi)=><span key={fi} style={{fontFamily:"monospace",fontSize:10,fontWeight:600,color:T.accent,background:T.accent+"15",padding:"1px 6px",borderRadius:4}}>{f.bspd_id}</span>)}
+ </div>:<span style={{fontSize:10,color:T.textDim}}>No feeders detected</span>}
+ {!res?._success&&<span style={{fontSize:9,color:T.danger,marginLeft:6}}>Parse error</span>}
+ </div>
+ </Card>;})}
+ </div>
+ </div>}
 
  {/* Feeders View */}
  {mcView==="feeders"&&<div style={{display:"grid",gridTemplateColumns:selData?"1fr 1fr":"1fr",gap:14}}>
@@ -5691,22 +6683,42 @@ Respond ONLY with valid JSON (no markdown, no backticks):
  </Card>}
  </div>}
 
- {/* Drawings View */}
- {mcView==="drawings"&&<div style={{display:"flex",flexDirection:"column",gap:10}}>
+ {/* Drawings View — Compact List */}
+ {mcView==="drawings"&&<Card style={{padding:0,overflow:"hidden"}}>
+ <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed"}}>
+ <thead><tr style={{background:T.bgInput,borderBottom:`1px solid ${T.border}`}}>
+ {["DWG #","Feeders","Connects To","Risers","Caution"].map((h,hi)=>
+ <th key={hi} style={{padding:"8px 10px",fontSize:10,fontWeight:700,color:T.textMuted,textTransform:"uppercase",letterSpacing:0.4,textAlign:"left",width:hi===0?"72px":hi===4?"60px":undefined}}>{h}</th>)}
+ </tr></thead>
+ <tbody>
  {mcResults.sort((a,b)=>(a.construction_drawing_number||999)-(b.construction_drawing_number||999)).map((r,i)=>
- <Card key={i} style={{padding:"14px 18px"}}>
- <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
- <span style={{fontFamily:"monospace",fontWeight:700,fontSize:14,color:T.text}}>{r.construction_drawing_number?`Drawing #${r.construction_drawing_number}`:`PDF Page ${r._pdfPage}`}</span>
- {!r._success&&<Badge label="Parse Error" color={T.danger} bg={T.dangerSoft}/>}
+ <tr key={i} onClick={()=>setMcViewPage(r._pdfPage)} style={{borderBottom:`1px solid ${T.border}`,cursor:"pointer",height:36,transition:"background 0.1s"}}
+ onMouseEnter={e=>{e.currentTarget.style.background=T.accent+"08";}} onMouseLeave={e=>{e.currentTarget.style.background="transparent";}}>
+ <td style={{padding:"4px 10px"}}>
+ <span style={{fontFamily:"monospace",fontSize:12,fontWeight:700,color:r._success?T.text:T.danger}}>{r.construction_drawing_number?`#${r.construction_drawing_number}`:`P${r._pdfPage}`}</span>
+ </td>
+ <td style={{padding:"4px 10px"}}>
+ <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+ {(r.feeders||[]).map((f,fi)=><span key={fi} style={{fontFamily:"monospace",fontSize:10,fontWeight:600,color:T.accent,background:T.accent+"12",padding:"1px 5px",borderRadius:3}}>{f.bspd_id}</span>)}
+ {(!r.feeders||r.feeders.length===0)&&<span style={{fontSize:10,color:T.textDim}}>—</span>}
  </div>
- {r.feeders?.length>0&&<div style={{marginBottom:6}}><span style={{fontSize:10,color:T.textDim,marginRight:6}}>FEEDERS:</span>
- {r.feeders.map((f,fi)=><span key={fi} style={{fontFamily:"monospace",fontSize:11,fontWeight:600,color:T.accent,background:T.accent+"15",padding:"2px 6px",borderRadius:4,marginRight:4}}>{f.bspd_id}</span>)}</div>}
- {r.to_print_references?.length>0&&<div style={{marginBottom:6}}><span style={{fontSize:10,color:T.textDim,marginRight:6}}>CONNECTS TO:</span>
- {r.to_print_references.map((p,pi)=><span key={pi} style={{fontFamily:"monospace",fontSize:11,color:T.cyan,marginRight:6}}>Print {p}</span>)}</div>}
- {r.risers?.length>0&&<div style={{marginBottom:4}}><span style={{fontSize:10,color:T.textDim,marginRight:6}}>RISERS:</span><span style={{fontSize:11,color:T.warning}}>{r.risers.join(" | ")}</span></div>}
- {r.caution_notes?.length>0&&<div><span style={{fontSize:10,color:T.danger,marginRight:6}}>⚠ CAUTION:</span><span style={{fontSize:11,color:T.danger}}>{r.caution_notes.join(" | ")}</span></div>}
- </Card>)}
- </div>}
+ </td>
+ <td style={{padding:"4px 10px"}}>
+ {(r.to_print_references||[]).length>0?<span style={{fontFamily:"monospace",fontSize:10,color:T.cyan}}>{r.to_print_references.map(p=>`→${p}`).join(" ")}</span>
+ :<span style={{fontSize:10,color:T.textDim}}>—</span>}
+ </td>
+ <td style={{padding:"4px 10px"}}>
+ {(r.risers||[]).length>0?<span style={{fontSize:10,color:T.warning}}>{r.risers.length}</span>
+ :<span style={{fontSize:10,color:T.textDim}}>—</span>}
+ </td>
+ <td style={{padding:"4px 10px"}}>
+ {(r.caution_notes||[]).length>0?<span style={{fontSize:10,color:T.danger,fontWeight:600}}>⚠ {r.caution_notes.length}</span>
+ :<span style={{fontSize:10,color:T.textDim}}>—</span>}
+ </td>
+ </tr>)}
+ </tbody>
+ </table>
+ </Card>}
 
  {/* Raw JSON View */}
  {mcView==="raw"&&<Card style={{padding:18}}>
@@ -5717,6 +6729,35 @@ Respond ONLY with valid JSON (no markdown, no backticks):
  <pre style={{fontFamily:"monospace",fontSize:10,color:T.textMuted,background:T.bgInput,borderRadius:6,padding:14,overflow:"auto",maxHeight:500,whiteSpace:"pre-wrap"}}>{JSON.stringify(mcResults,null,2)}</pre>
  </Card>}
  </>}
+
+ {/* Full-Size Page Viewer Modal */}
+ {mcViewPage&&(()=>{const pg=mcPages.find(p=>p.pageNum===mcViewPage);const res=getResultForPage(mcViewPage);const pFeeders=getFeedersForPage(mcViewPage);
+ const hasPrev=mcViewPage>1;const hasNext=mcViewPage<mcPages.length;
+ return <Modal open onClose={()=>setMcViewPage(null)} title={`Page ${mcViewPage}${res?.construction_drawing_number?` — Drawing #${res.construction_drawing_number}`:""}`} width={980}>
+ <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
+ <Btn sz="sm" v="ghost" disabled={!hasPrev} onClick={()=>setMcViewPage(mcViewPage-1)}>← Prev</Btn>
+ <Btn sz="sm" v="ghost" disabled={!hasNext} onClick={()=>setMcViewPage(mcViewPage+1)}>Next →</Btn>
+ <span style={{fontSize:12,color:T.textMuted,margin:"0 8px"}}>Page {mcViewPage} of {mcPages.length}</span>
+ <div style={{flex:1}}/>
+ <Btn sz="sm" onClick={()=>downloadPagePng(mcViewPage)}>Download PNG</Btn>
+ </div>
+ {pg&&<img src={pg.dataUrl} alt={`Page ${mcViewPage}`} style={{width:"100%",maxWidth:960,borderRadius:6,border:`1px solid ${T.border}`,marginBottom:14}}/>}
+ {(pFeeders.length>0||res?.to_print_references?.length>0||res?.caution_notes?.length>0||res?.risers?.length>0)&&
+ <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:8}}>
+ {pFeeders.length>0&&<div><span style={{fontSize:10,fontWeight:700,color:T.textMuted,textTransform:"uppercase",marginRight:6}}>Feeders:</span>
+ {pFeeders.map((f,i)=><span key={i} style={{fontFamily:"monospace",fontSize:11,fontWeight:600,color:T.accent,background:T.accent+"15",padding:"2px 6px",borderRadius:4,marginRight:4}}>{f.bspd_id}</span>)}</div>}
+ {res?.to_print_references?.length>0&&<div><span style={{fontSize:10,fontWeight:700,color:T.textMuted,textTransform:"uppercase",marginRight:6}}>Connects To:</span>
+ {res.to_print_references.map((p,i)=><span key={i} style={{fontFamily:"monospace",fontSize:11,color:T.cyan,marginRight:6}}>Print {p}</span>)}</div>}
+ {res?.risers?.length>0&&<div><span style={{fontSize:10,fontWeight:700,color:T.textMuted,textTransform:"uppercase",marginRight:6}}>Risers:</span><span style={{fontSize:11,color:T.warning}}>{res.risers.join(", ")}</span></div>}
+ {res?.caution_notes?.length>0&&<div><span style={{fontSize:10,fontWeight:700,color:T.danger,textTransform:"uppercase",marginRight:6}}>Caution:</span><span style={{fontSize:11,color:T.danger}}>{res.caution_notes.join(" | ")}</span></div>}
+ </div>}
+ {pFeeders.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+ {pFeeders.map((f,i)=>{const isCreated=!!createdJobs[f.bspd_id];return isCreated
+ ?<Badge key={i} label={`${f.bspd_id} → Job #${createdJobs[f.bspd_id]}`} color={T.success} bg={T.successSoft}/>
+ :<Btn key={i} sz="sm" v="ghost" onClick={()=>{const fd=feederMap[f.bspd_id];if(fd)createJobFromFeeder(fd);}}>+ Create Job: {f.bspd_id}</Btn>;
+ })}
+ </div>}
+ </Modal>;})()}
  </div>;
 }
 
@@ -7027,7 +8068,7 @@ function SettingsView(){
  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
  {cc.truckMaintenance.map(cat=><div key={cat} style={{display:"flex",alignItems:"center",gap:4,padding:"5px 10px",borderRadius:4,background:T.bgInput,border:`1px solid ${T.border}`}}>
  <span style={{fontSize:12,color:T.text}}>{cat}</span>
- <button onClick={()=>removeTruckMaint(cat)} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",fontSize:12,padding:0,lineHeight:1}}>✕</button>
+ <button onClick={()=>removeTruckMaint(cat)} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",padding:0,display:"flex",alignItems:"center"}}><Trash size={12}/></button>
  </div>)}
  </div>
  <div style={{display:"flex",gap:8}}>
@@ -7043,7 +8084,7 @@ function SettingsView(){
  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
  {cc.drillMaintenance.map(cat=><div key={cat} style={{display:"flex",alignItems:"center",gap:4,padding:"5px 10px",borderRadius:4,background:T.bgInput,border:`1px solid ${T.border}`}}>
  <span style={{fontSize:12,color:T.text}}>{cat}</span>
- <button onClick={()=>removeDrillMaint(cat)} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",fontSize:12,padding:0,lineHeight:1}}>✕</button>
+ <button onClick={()=>removeDrillMaint(cat)} style={{background:"none",border:"none",color:T.danger,cursor:"pointer",padding:0,display:"flex",alignItems:"center"}}><Trash size={12}/></button>
  </div>)}
  </div>
  <div style={{display:"flex",gap:8}}>
@@ -7091,6 +8132,24 @@ function SettingsView(){
   </div>;
  })}
  </Card>
+
+ {/* AI Configuration */}
+ <Card style={{marginBottom:16,padding:20}}>
+ <div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:4}}>AI Map Reading (Claude API)</div>
+ <div style={{fontSize:12,color:T.textMuted,marginBottom:12}}>Provide your Anthropic API key to enable AI-powered map analysis. The key is stored locally in your browser and never sent to our servers.</div>
+ <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+ <div style={{flex:1}}>
+ <label style={{display:"block",fontSize:11,fontWeight:600,color:T.textMuted,marginBottom:4,textTransform:"uppercase",letterSpacing:0.4}}>Anthropic API Key</label>
+ <input type="password" defaultValue={localStorage.getItem("anthropicApiKey")||""} id="ai-api-key-input" placeholder="sk-ant-..." style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:4,border:`1px solid ${T.border}`,background:T.bgInput,color:T.text,fontSize:13,fontFamily:"monospace"}}/>
+ </div>
+ <Btn sz="sm" onClick={()=>{const v=document.getElementById("ai-api-key-input")?.value||"";if(v.trim()){localStorage.setItem("anthropicApiKey",v.trim());alert("API key saved!");}else{localStorage.removeItem("anthropicApiKey");alert("API key removed.");}}}>Save Key</Btn>
+ </div>
+ {localStorage.getItem("anthropicApiKey")&&<div style={{marginTop:8,fontSize:11,color:T.success,display:"flex",alignItems:"center",gap:4}}>
+ <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+ API key configured
+ </div>}
+ </Card>
+
  </div>;
 }
 
@@ -7107,7 +8166,7 @@ function mapAuthUser(au){
 
 export default function App({authUser,onLogout}){
  // ─── Data from backend hooks ───────────────────────────────────────────────
- const{jobs,setJobs,loading:jobsLoading,error:jobsError,fetchJobs,createJob:apiCreateJob,updateJob:apiUpdateJob}=useJobs();
+ const{jobs,setJobs,loading:jobsLoading,error:jobsError,fetchJobs,createJob:apiCreateJob,updateJob:apiUpdateJob,deleteJob:apiDeleteJob}=useJobs();
  const{users:backendUsers,loading:usersLoading,error:usersError}=useUsers();
  const{rateCards,setRateCards,loading:rateCardsLoading,error:rateCardsError,fetchRateCards}=useRateCards();
 
@@ -7118,7 +8177,16 @@ export default function App({authUser,onLogout}){
  const[trucks,setTrucks]=useState([]);
  const[drills,setDrills]=useState([]);
  const[currentUser,setCU]=useState(()=>mapAuthUser(authUser));
- const[view,setView]=useState("dashboard");
+ const[view,setView]=useState(()=>{
+  const u=mapAuthUser(authUser);
+  if(u.role==="lineman"||u.role==="foreman")return "jobs";
+  if(u.role==="redline_specialist"||u.role==="billing")return "jobs";
+  if(u.role==="supervisor")return "supervisor_dashboard";
+  if(u.role==="client_manager")return "client_portal";
+  if(u.role==="truck_investor")return "investor_dashboard";
+  if(u.role==="drill_investor")return "drill_investor_dashboard";
+  return "dashboard";
+ });
  const[selectedJob,setSelectedJob]=useState(null);
  const[navFrom,setNavFrom]=useState(null);
  const[jobsPreFilter,setJobsPreFilter]=useState("");
@@ -7243,7 +8311,7 @@ export default function App({authUser,onLogout}){
  const[isMobile,setIsMobile]=useState(typeof window!=='undefined'&&window.innerWidth<768);
  useEffect(()=>{const h=()=>setIsMobile(window.innerWidth<768);window.addEventListener('resize',h);return()=>window.removeEventListener('resize',h);},[]);
 
- const ctx={jobs,setJobs,rateCards,setRateCards,currentUser,view,setView,selectedJob,setSelectedJob,dark,setDark,paidStubs,setPaidStubs,payrollRuns,setPayrollRuns,bankAccounts,setBankAccounts,trucks,setTrucks,drills,setDrills,pickups,setPickups,materialMode,setMaterialMode,invoices,setInvoices,tickets,setTickets,navFrom,setNavFrom,jobsPreFilter,setJobsPreFilter,clientSubFilter,setClientSubFilter,clientDetailOpen,setClientDetailOpen,companyConfig,setCompanyConfig,notifications:myNotifs,unreadCount,isMobile,onLogout,dataLoading,dataError,fetchJobs,fetchRateCards,apiCreateJob,apiUpdateJob,users:USERS};
+ const ctx={jobs,setJobs,rateCards,setRateCards,currentUser,view,setView,selectedJob,setSelectedJob,dark,setDark,paidStubs,setPaidStubs,payrollRuns,setPayrollRuns,bankAccounts,setBankAccounts,trucks,setTrucks,drills,setDrills,pickups,setPickups,materialMode,setMaterialMode,invoices,setInvoices,tickets,setTickets,navFrom,setNavFrom,jobsPreFilter,setJobsPreFilter,clientSubFilter,setClientSubFilter,clientDetailOpen,setClientDetailOpen,companyConfig,setCompanyConfig,notifications:myNotifs,unreadCount,isMobile,onLogout,dataLoading,dataError,fetchJobs,fetchRateCards,apiCreateJob,apiUpdateJob,apiDeleteJob,users:USERS};
 
 
  // DrillsView and TrucksView are defined at module level (above App)
@@ -7281,7 +8349,7 @@ export default function App({authUser,onLogout}){
  <div style={{display:"flex",gap:4,marginBottom:16,background:T.bgInput,borderRadius:4,padding:3,width:"fit-content"}}>
  {[{k:"week",l:"Week"},{k:"month",l:"Month"},{k:"year",l:"Year"}].map(p=>
  <button key={p.k} onClick={()=>setPeriod(p.k)} style={{padding:"6px 16px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer",border:"none",
- background:period===p.k?T.accent:"transparent",color:period===p.k?"#fff":T.textMuted,transition:"all 0.15s"}}>{p.l}</button>
+ background:period===p.k?T.accent:"transparent",color:period===p.k?T.bg:T.textMuted,transition:"all 0.15s"}}>{p.l}</button>
  )}
  </div>
  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))",gap:14,marginBottom:24}}>
@@ -7471,7 +8539,7 @@ export default function App({authUser,onLogout}){
  <Card style={{padding:14}}>
  <div style={{fontSize:11,fontWeight:600,color:T.textMuted,marginBottom:10,textTransform:"uppercase",letterSpacing:0.4}}>Jobs in Region</div>
  <DT columns={[
- {key:"id",label:"Job",render:r=><span style={{fontFamily:"monospace",fontSize:11,color:T.accent}}>{r.id}</span>},
+ {key:"id",label:"Job",render:r=><span style={{fontFamily:"monospace",fontSize:11,color:T.accent}} title={r.id}>{r.feederId||r.id?.slice(0,12)}</span>},
  {key:"feeder",label:"Feeder",render:r=><span style={{fontFamily:"monospace",fontSize:11}}>{r.feederId}</span>},
  {key:"lineman",label:"Lineman",render:r=><span>{USERS.find(u=>u.id===r.assignedLineman)?.name||"—"}</span>},
  {key:"feet",label:"Footage",render:r=><span style={{fontWeight:600}}>{r.feet} ft</span>},
@@ -7540,7 +8608,7 @@ export default function App({authUser,onLogout}){
  <div style={{display:"flex",gap:4,marginBottom:16,background:T.bgInput,borderRadius:4,padding:3,width:"fit-content"}}>
  {[{k:"week",l:"Week"},{k:"month",l:"Month"},{k:"year",l:"Year"}].map(p=>
  <button key={p.k} onClick={()=>setPeriod(p.k)} style={{padding:"6px 16px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer",border:"none",
- background:period===p.k?T.accent:"transparent",color:period===p.k?"#fff":T.textMuted,transition:"all 0.15s"}}>{p.l}</button>
+ background:period===p.k?T.accent:"transparent",color:period===p.k?T.bg:T.textMuted,transition:"all 0.15s"}}>{p.l}</button>
  )}
  </div>
 
@@ -8154,6 +9222,8 @@ export default function App({authUser,onLogout}){
  }
 
  const render=()=>{
+ // Guard: non-admin roles that land on "dashboard" fallback → redirect to their home
+ if(view==="dashboard"&&["lineman","foreman","redline_specialist","billing"].includes(currentUser.role)){return <JobsMgmt/>;}
  if(view==="job_detail"){if(!selectedJob){setView("jobs");return <JobsMgmt/>;}return <ViewErrorBoundary onReset={()=>{setSelectedJob(null);setView("jobs");}}><JobDetail/></ViewErrorBoundary>;};
  if(view==="investor_dashboard")return <InvestorDashboard/>;
  if(view==="investor_stubs")return <InvestorStubsView/>;
